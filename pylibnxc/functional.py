@@ -185,8 +185,15 @@ class GridFunc(NXCFunctional):
             if self._tau_w_cap and not self.internal_thresholds:
                 ra_, rb_ = torch_inputs[0][:, 0], torch_inputs[1][:, 0]
                 sa_, sb_ = torch_inputs[2][:, 0], torch_inputs[4][:, 0]
-                torch_inputs[2] = (sa_ + (torch.minimum(sa_, 8 * ra_ * ta_) - sa_).detach()).unsqueeze(-1)
-                torch_inputs[4] = (sb_ + (torch.minimum(sb_, 8 * rb_ * tb_) - sb_).detach()).unsqueeze(-1)
+                sa_ = sa_ + (torch.minimum(sa_, 8 * ra_ * ta_) - sa_).detach()
+                sb_ = sb_ + (torch.minimum(sb_, 8 * rb_ * tb_) - sb_).detach()
+                torch_inputs[2] = sa_.unsqueeze(-1)
+                torch_inputs[4] = sb_.unsqueeze(-1)
+                # as Libxc: sigma_ab within +-(sigma_aa + sigma_bb)/2 after the cap
+                sab_ = torch_inputs[3][:, 0]
+                s_ave = (0.5 * (sa_ + sb_)).detach()
+                torch_inputs[3] = (sab_ + (torch.maximum(torch.minimum(sab_, s_ave), -s_ave)
+                                           - sab_).detach()).unsqueeze(-1)
             torch_inputs.append(ta_.unsqueeze(-1))
             torch_inputs.append(tb_.unsqueeze(-1))
 

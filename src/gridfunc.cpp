@@ -188,6 +188,10 @@ void GridFunc::evaluate(int level, int np, double rho[], double sigma[], double 
         torch::Tensor cap = 8.0 * cols[s2] * cols[7 + s2];
         sg = sg + (torch::minimum(sg, cap) - sg).detach();
       }
+      // as Libxc: keep sigma_ab within +-(sigma_aa + sigma_bb)/2 after the cap (for
+      // unpolarized input this keeps sigma_aa = sigma_ab = sigma_bb)
+      torch::Tensor s_ave = 0.5 * (cols[2] + cols[4]).detach();
+      cols[3] = cols[3] + (torch::maximum(torch::minimum(cols[3], s_ave), -s_ave) - cols[3]).detach();
     }
   }
 
@@ -215,8 +219,15 @@ void GridFunc::evaluate(int level, int np, double rho[], double sigma[], double 
   texc = texc.slice(0, 0, nf);
   if (!torch::isfinite(texc).all().item<bool>()){
     std::ostringstream msg;
-    msg << "libnxc: non-finite exc at " << (~torch::isfinite(texc)).sum().item<int64_t>() << " of "
-        << nf << " points";
+    torch::Tensor badidx = torch::nonzero(~torch::isfinite(texc)).reshape({-1});
+    msg << "libnxc: non-finite exc at " << badidx.size(0) << " of " << nf << " points; first inputs "
+        << "(rho_a, rho_b, sigma_aa, sigma_ab, sigma_bb[, lapl_a, lapl_b, tau_a, tau_b]):";
+    torch::Tensor rows = inp.index_select(0, badidx.slice(0, 0, 3)).to(torch::kCPU).detach();
+    msg.precision(6);
+    for (int64_t i = 0; i < rows.size(0); ++i){
+      msg << "\n   ";
+      for (int64_t j = 0; j < rows.size(1); ++j) msg << " " << std::scientific << rows[i][j].item<double>();
+    }
     throw std::runtime_error(msg.str());
   }
   torch::Tensor texc_full = torch::zeros({np}, options_dp).index_put({idx}, texc);
