@@ -2,6 +2,7 @@
 #include "nxc.h"
 #include <torch/script.h> // One-stop header.
 #include <filesystem>
+#include <vector>
 #include "nxc_mpi.h"
 // #include "nxc_mpi.h"
 
@@ -118,7 +119,7 @@ void AtomicFunc::get_descriptors(torch::Tensor &rho, torch::Tensor *descr){
     std::vector<bool> on_rank;
     on_rank.resize(nua);
 
-    torch::Tensor this_pos, rad, ang, box, descr_glob[nua], scaler;
+    torch::Tensor this_pos, rad, ang, box, scaler;
     if (device==DEVICE_CUDA){
       scaler = torch::eye({3}).to(at::kCUDA) + epsilon;
     }else{
@@ -194,7 +195,9 @@ void AtomicFunc::exc_vxc(int np, double rho[], double exc[], double vrho[]){
     torch::Tensor trho= torch::from_blob(rho, np, options_dp.requires_grad(true));
     torch::Tensor trho_view = trho.view({box_dim[2], box_dim[1], box_dim[0]}).transpose(0,2);
     torch::Tensor E = torch::zeros({1}, options_dp);
-    torch::Tensor descr[nua], e;
+    std::vector<torch::Tensor> descr_v(nua);   // (was a VLA; rejected by clang)
+    torch::Tensor *descr = descr_v.data();
+    torch::Tensor e;
 
     if (device == DEVICE_CUDA){
       trho_view = trho_view.to(at::kCUDA);
@@ -224,7 +227,7 @@ void AtomicFunc::exc_vxc(int np, double rho[], double exc[], double vrho[]){
         }
     }
     if (edens){
-      double grid_factor  = (double(np))/double(*(torch::prod(tgrid).data_ptr<long>()));
+      double grid_factor  = (double(np))/double(*(torch::prod(tgrid).to(torch::kInt64).data_ptr<int64_t>()));
       torch::Tensor qtot = torch::sum(trho)*V_cell;
       torch::Tensor t_exc =E/qtot*torch::ones_like(trho)*grid_factor;
       t_exc = t_exc.to(at::kCPU);

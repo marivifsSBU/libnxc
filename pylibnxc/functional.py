@@ -62,8 +62,10 @@ class NXCFunctional(ABC):
             raise Exception(
                 'Model not found at {}, please check if path correct'.format(
                     path))
-        self.energy_model =\
-                 torch.jit.load(path + '/xc')
+        extra = {'manifest.json': ''}
+        self.energy_model = torch.jit.load(path + '/xc', _extra_files=extra)
+        # exporter models declare that they handle empty spin channels and sigma = 0
+        self.internal_thresholds = '"thresholds": "internal"' in str(extra['manifest.json'])
         self.safe_mode = True
 
     def initialize(self):
@@ -77,6 +79,14 @@ class GridFunc(NXCFunctional):
 
     # _gamma_eps = 1e-8
     _gamma_eps = 0
+    # As in the C++ library: negative spin densities, sigma_aa, sigma_bb and tau are clipped
+    # to 0; spin densities and sigma_aa, sigma_bb are floored at _spin_floor / _sigma_floor
+    # with the gradient passed through (derivatives evaluated at the floored point, as
+    # Libxc does), which keeps models with rho^(1/3) or sqrt(sigma) terms finite at an
+    # empty spin channel or sigma = 0.  Skipped for models that declare
+    # "thresholds": "internal" in their embedded manifest (exporter models).
+    _spin_floor = 1e-15
+    _sigma_floor = 1e-40
 
     def compute(self, inp, do_exc=True, do_vxc=True, **kwargs):
         """ Evaluate the functional on a given input
@@ -144,9 +154,21 @@ class GridFunc(NXCFunctional):
             if 'tau' in inp:
                 tau_a = tau_b = tau * 0.5
 
-        torch_inputs.append(rho0_a.unsqueeze(-1))
-        torch_inputs.append(rho0_b.unsqueeze(-1))
+        def nonneg(x):
+            return torch.where(x >= 0, x, torch.zeros_like(x))
+
+        def floor(x, value):
+            x = nonneg(x)
+            if self.internal_thresholds:
+                return x
+            return x + (torch.clamp(x, min=value) - x).detach()
+
+        rho_sum = rho0_a + rho0_b          # raw densities weight exc (as in the C++ library)
+        torch_inputs.append(floor(rho0_a, self._spin_floor).unsqueeze(-1))
+        torch_inputs.append(floor(rho0_b, self._spin_floor).unsqueeze(-1))
         if 'gamma' in inp or 'sigma' in inp:
+            sigma_a = floor(sigma_a, self._sigma_floor)
+            sigma_b = floor(sigma_b, self._sigma_floor)
             torch_inputs.append(sigma_a.unsqueeze(-1))
             torch_inputs.append(sigma_ab.unsqueeze(-1))
             torch_inputs.append(sigma_b.unsqueeze(-1))
@@ -155,13 +177,13 @@ class GridFunc(NXCFunctional):
                 tau_a.unsqueeze(-1)))  # Expects laplacian in input
             torch_inputs.append(torch.zeros_like(
                 tau_b.unsqueeze(-1)))  # even though not used
-            torch_inputs.append(tau_a.unsqueeze(-1))
-            torch_inputs.append(tau_b.unsqueeze(-1))
+            torch_inputs.append(nonneg(tau_a).unsqueeze(-1))
+            torch_inputs.append(nonneg(tau_b).unsqueeze(-1))
 
         torch_inputs = torch.cat(torch_inputs, dim=-1)
         exc = self.energy_model(torch_inputs)[:, 0]
         assert exc.dim() == 1
-        E = torch.dot(exc, torch_inputs[:, 0] + torch_inputs[:, 1])
+        E = torch.dot(exc, rho_sum)
 
         if do_vxc:
             E.backward()

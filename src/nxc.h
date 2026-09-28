@@ -18,8 +18,16 @@ const int NXC_UNPOLARIZED=1;
 * @param ns symbols.size()
 * @param myBox box in simulation cell (used mainly for MPI decomposition)
 * @param edens 0: return total energy, 1: return energy density  (default: 1)
-* @param add 0: set return values 1: add return values (default: 1)
+* @param add 0: set return values 1: add return values (default: 0)
 * @param cuda 0: use cpu 1: use gpu (default: 0)
+* @param gamma 0: sigma holds contracted gradients (aa[,ab,bb]); 1: gradient components
+* @param interleaved array layout for spin/components: 0 (default) blocked, a[is*np + ip]
+*        (grid index fastest, Fortran a(np, nspin)); 1 interleaved as in Libxc, a[ip*nspin + is]
+* @param rho_threshold points with rho_a + rho_b <= rho_threshold get exc = v = 0 (default 1e-10)
+* @param spin_threshold, sigma_threshold spin densities and sigma_aa, sigma_bb are floored at
+*        these values with the gradient passed through (derivatives evaluated at the floored
+*        point, as in Libxc; defaults 1e-15 and 1e-40 = 1e-15^(8/3)).  Not applied to models
+*        whose embedded manifest declares "thresholds": "internal" (exporter models).
 */
 struct func_param{
   double * pos; // atomic positions
@@ -34,6 +42,10 @@ struct func_param{
   int add = defaults->add;
   int cuda = defaults->cuda;
   int gamma = defaults->gamma;
+  int interleaved = defaults->interleaved;
+  double rho_threshold = defaults->rho_threshold;
+  double sigma_threshold = defaults->sigma_threshold;
+  double spin_threshold = defaults->spin_threshold;
 };
 
 
@@ -55,8 +67,8 @@ public:
   virtual void to_cuda(){};
   virtual int get_family(){return -1;};
 protected:
-  int nspin;
-  int device;
+  int nspin = NXC_UNPOLARIZED;
+  int device = 0;
 };
 
 struct nxc_func_type{

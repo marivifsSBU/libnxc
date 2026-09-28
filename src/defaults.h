@@ -10,7 +10,8 @@ class Defaults {
   static Defaults *instance;
   Defaults(){};
   public:
-    int edens, add, cuda, gamma;
+    int edens, add, cuda, gamma, interleaved;
+    double rho_threshold, sigma_threshold, spin_threshold;
     static Defaults *getInstance() {
       if (!instance)
         instance = new Defaults;
@@ -18,6 +19,10 @@ class Defaults {
       instance->add = 0;
       instance->cuda = 0;
       instance->gamma = 0;
+      instance->interleaved = 0;
+      instance->rho_threshold = 1e-10;
+      instance->sigma_threshold = 1e-40;
+      instance->spin_threshold = 1e-15;
       return instance;
     }
     void setDefault(const int code);

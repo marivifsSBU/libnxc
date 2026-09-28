@@ -37,6 +37,31 @@ Table of Contents
       * [Using Libnxc with Libxc](#using-libnxc-with-libxc)
       * [Shipped functionals](#shipped-functionals)
 
+## Revival branch (2026): build with CMake
+
+The `revival` branch builds with CMake against a current libtorch (tested: torch 2.14 on
+macOS arm64 with Apple clang 17 + gfortran 14; libtorch >= 2.10 needs C++20). The libtorch of
+a pip/conda torch installation works; use the same torch version (or newer) as the one that
+exported the models.
+
+```bash
+TORCH_PREFIX=$(python -c 'import torch; print(torch.utils.cmake_prefix_path)')
+cmake -S . -B build-cmake -DCMAKE_PREFIX_PATH="$TORCH_PREFIX" \
+      -DNXC_TEST_PYTHON=$(which python)           # python with torch (+pyscf) for the tests
+cmake --build build-cmake -j
+ctest --test-dir build-cmake --output-on-failure
+```
+(on macOS with Homebrew gfortran, `export SDKROOT=$(xcrun --show-sdk-path)` first)
+
+- C++ API: `src/nxc.h`; Fortran module `nxc` (`src/nxc_mod.f90`, ISO_C_BINDING, with error
+  codes); the legacy implicit-interface `nxc_f90_*` routines (SIESTA patch) are kept.
+- Custom models: any directory `<LDA|GGA|MGGA>_<...>/xc` can be passed by path.
+- Arrays are spin-blocked with the grid index fastest (`rho(np, nspin)`); see docs/cpp.rst.
+- `test/revival`: C++ and Fortran APIs vs pylibnxc on random, fully spin-polarized and
+  molecular densities (layouts, add mode, single points, sub-threshold points).
+- The Libxc hook (`src/libxc`, `utils/libxc`) targets Libxc 4.3.4 internals only and is not
+  maintained; host codes should call libnxc directly.
+
 ## Dependencies
 
 Libnxc depends on PyTorch. The C++/Fortran implementation requires that libtorch is made available at compile time, pylibnxc depends on pytorch.

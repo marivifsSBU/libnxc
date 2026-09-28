@@ -134,7 +134,15 @@ for evaluation:::
 The arguments are defined in the same way as for Libxc with the notable exception that
 sigma (and accordingly vsigma) can either be the reduced gradient or the gradient of the
 density (and the corresponding potential term) depending on the parameter ``gamma`` in the ``func_param`` struct. For multidimensional arrays
-the **fastest** index is understood to run over grid points. ``int np`` is the full size of the array ``rho``, i.e. for spin polarized calculations (``NXC_SPIN_POLARIZED``) it is twice the number of grid points, and equal to the number of grid points for unpolarized calculations.
+the **fastest** index is understood to run over grid points (spin-blocked layout, Fortran ``rho(np, nspin)``,
+``sigma(np, 3)`` with columns aa, ab, bb). ``int np`` is the **number of grid points**; for spin polarized
+calculations (``NXC_POLARIZED``) ``rho``, ``lapl`` and ``tau`` hold ``2*np`` values and ``sigma`` ``3*np``.
+Setting ``func_param.interleaved = 1`` selects the Libxc layout instead (``rho[ip*nspin + is]``).
+Points with ``rho_a + rho_b <= func_param.rho_threshold`` (default 1e-10) return zero energy density and potentials.
+Spin densities and ``sigma_aa``, ``sigma_bb`` are floored at ``spin_threshold`` / ``sigma_threshold`` (1e-15, 1e-40)
+with derivatives evaluated at the floored point, as in Libxc; models exported with the libnxc_revival exporter
+declare ``"thresholds": "internal"`` in their embedded manifest and are evaluated without floors.
+Errors (e.g. non-finite model output) are thrown as ``std::runtime_error``.
 
 NeuralXC functionals require special treatment, as their dependency on localized atomic orbitals produces additional
 terms when evaluating forces and stress. These corrections can be obtained with the method ``nxc_lda_exc_vxc_fs``, which

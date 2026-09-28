@@ -10,19 +10,15 @@ int nxc_func_init(nxc_func_type* p, std::string model, func_param fp, int nspin)
       f->init(fp, nspin);
       p->func = f;
       return 0;
-    }catch (const c10::Error& e) {
+    }catch (const std::exception& e) {        // c10::Error derives from std::exception
+      std::cerr << "libnxc: could not initialize functional '" << model << "': " << e.what() << std::endl;
       return -1;
     }
 }
 
 int nxc_func_init(nxc_func_type* p, std::string model, int nspin){
-    try{
-      std::shared_ptr<NXCFunc> f = get_functional(model);
-      p->func = f;
-      return 0;
-    }catch (const c10::Error& e) {
-      return -1;
-    }
+    func_param fp;
+    return nxc_func_init(p, model, fp, nspin);
 }
 
 void nxc_lda_exc_vxc(nxc_func_type* p, int np, double rho[], double exc[], double vrho[]){

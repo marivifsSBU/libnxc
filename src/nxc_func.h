@@ -44,9 +44,21 @@ class GridFunc : public NXCFunc{
     bool edens;
     bool add;
     bool gamma;
+    bool interleaved = false;
+    double rho_threshold = 1e-10;
+    double sigma_threshold = 1e-40;
+    double spin_threshold = 1e-15;
+    bool internal_thresholds = false;   // model handles empty channels / sigma = 0 itself
     torch::Tensor tcell, tgrid, V_cell;
+    // shared LDA (level 0) / GGA (1) / meta-GGA (2) evaluation, see gridfunc.cpp
+    void evaluate(int level, int np, double rho[], double sigma[], double lapl[], double tau[],
+                  double *exc, double vrho[], double vsigma[], double vlapl[], double vtau[]);
 
 };
+
+// directory containing <model>/xc: as given, under $NXC_MODELPATH, or under the
+// shipped models directory; "" if not found
+std::string resolve_model_dir(const std::string &modelname);
 
 class LDAFunc : public GridFunc{
 

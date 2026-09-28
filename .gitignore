@@ -135,3 +135,6 @@ ENV/
 # mypy
 .mypy_cache/
 log/
+
+# CMake build directory
+build-cmake/

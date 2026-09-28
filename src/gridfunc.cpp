@@ -1,57 +1,97 @@
 #include "nxc.h"
 #include "nxc_func.h"
 #include <torch/script.h> // One-stop header.
+#include <cstdlib>
 #include <filesystem>
+#include <sstream>
+#include <stdexcept>
+#include <vector>
+#include <unordered_map>
+
 #define STRINGIZER(arg)     #arg
 #define STR_VALUE(arg)      STRINGIZER(arg)
+#ifdef NXC_DEFAULTPATH_STR
+const std::string default_modeldir = NXC_DEFAULTPATH_STR;
+#else
 #define NXC_DEFAULTPATH_STRING STR_VALUE(NXC_DEFAULTPATH)
-
 const std::string default_modeldir = NXC_DEFAULTPATH_STRING;
+#endif
 
-inline void distribute_v(double * v_src, double * v_tar,
-   int nouter, int ninner, int offset, double mult, bool add){
+namespace {
 
-   if(add){
-    for (int is=0; is < nouter; ++is){
-      for (int ip=0; ip < ninner; ++ip){
-        v_tar[is*ninner+ip] += v_src[(is+offset)*ninner+ip]*mult;
-      }
-    }
-   }else{
-    for (int is=0; is < nouter; ++is){
-      for (int ip=0; ip < ninner; ++ip){
-        v_tar[is*ninner+ip] = v_src[(is+offset)*ninner+ip]*mult;
-      }
-    }
-   }
+std::string join_path(const std::string &dir, const std::string &name){
+  if (dir.empty()) return name;
+  return (std::filesystem::path(dir) / name).string();
+}
+
+// Leaf tensor over a host array of nblk*np doubles; returns the (nblk, np) view in
+// spin/component-blocked order.  Blocked (default): a[ib*np + ip] (Fortran a(np, nblk)).
+// Interleaved (Libxc): a[ip*nblk + ib].
+torch::Tensor host_leaf(double *a, int nblk, int np, bool interleaved, torch::Tensor &leaf){
+  leaf = torch::from_blob(a, {(int64_t)nblk * np}, options_dp.requires_grad(true));
+  if (interleaved) return leaf.view({np, nblk}).t();
+  return leaf.view({nblk, np});
+}
+
+// Copy (or add) a gradient/energy tensor with the same layout as the host array.
+void to_host(const torch::Tensor &src, double *dst, int64_t n, bool add){
+  torch::Tensor s = src.defined() ? src.to(torch::kCPU).contiguous() : torch::zeros({n}, options_dp);
+  const double *p = s.data_ptr<double>();
+  if (add){
+    for (int64_t i = 0; i < n; ++i) dst[i] += p[i];
+  }else{
+    for (int64_t i = 0; i < n; ++i) dst[i] = p[i];
+  }
+}
+
+void zero_host(double *dst, int64_t n, bool add){
+  if (!add && dst != nullptr)
+    for (int64_t i = 0; i < n; ++i) dst[i] = 0.0;
+}
+
+torch::Tensor nonneg(const torch::Tensor &x){
+  // '>=': gradient 1 at x == 0 (one-sided derivative for an empty spin channel)
+  return torch::where(x >= 0, x, torch::zeros_like(x));
+}
+
+torch::Tensor floored(const torch::Tensor &x, double floor){
+  // value max(x, floor) with the gradient passed through, i.e. the potential is the
+  // derivative evaluated at the floored point, as Libxc does with its density and sigma
+  // thresholds.  Protects models with rho^(1/3) or sqrt(sigma) terms from 0*inf at an
+  // empty spin channel or sigma = 0.  floor <= 0: identity.
+  if (floor <= 0) return x;
+  return x + (torch::clamp_min(x, floor) - x).detach();
+}
+
+
+} // namespace
+
+std::string resolve_model_dir(const std::string &modelname){
+  std::vector<std::string> candidates = {modelname};
+  if (const char *env = std::getenv("NXC_MODELPATH"))
+    candidates.push_back(join_path(env, modelname));
+  candidates.push_back(join_path(default_modeldir, modelname));
+  for (const auto &c : candidates)
+    if (std::filesystem::exists(join_path(c, "xc"))) return c;
+  return "";
 }
 
 GridFunc::GridFunc(std::string modelname){
-
-    std::string fullname;
-    if(std::getenv("NXC_MODELPATH")){
-        const char* modeldir;
-        modeldir = std::getenv("NXC_MODELPATH");
-        fullname = std::string(modeldir) + modelname;
-    }else{
-        fullname = default_modeldir + modelname;
-    }
-
-    std::string path;
-    try {
-      path =  modelname + "/xc";
-      model.energy = torch::jit::load(path);
-    }catch (const c10::Error& e) {
-      try {
-        path =  fullname + "/xc";
-        model.energy = torch::jit::load(path);
-      }catch (const c10::Error& e) {
-        std::cerr << "error loading the model " << path << std::endl;
-        throw(e);
-      }
-      // std::cerr << "error loading the model " << path << std::endl;
-      // throw(e);
-    }
+  std::string dir = resolve_model_dir(modelname);
+  if (dir.empty())
+    throw std::runtime_error("libnxc: model '" + modelname + "' not found (looked for <name>/xc as "
+                             "given, under $NXC_MODELPATH and under " + default_modeldir + ")");
+  try {
+    // models written by the libnxc_revival exporter embed a manifest; those declaring
+    // "thresholds": "internal" handle empty spin channels and sigma = 0 themselves
+    std::unordered_map<std::string, std::string> extra{{"manifest.json", ""}};
+    model.energy = torch::jit::load(join_path(dir, "xc"), std::nullopt, extra);
+    internal_thresholds = extra["manifest.json"].find("\"thresholds\": \"internal\"") != std::string::npos;
+  }catch (const c10::Error& e) {
+    throw std::runtime_error("libnxc: error loading the model " + join_path(dir, "xc") + ": " +
+                             e.what_without_backtrace());
+  }
+  model.energy.eval();
 }
 
 void GridFunc::init(func_param fp, int nspin){
@@ -59,6 +99,10 @@ void GridFunc::init(func_param fp, int nspin){
   add = fp.add;
   edens = fp.edens;
   gamma = fp.gamma;
+  interleaved = fp.interleaved;
+  rho_threshold = fp.rho_threshold;
+  sigma_threshold = internal_thresholds ? 0.0 : fp.sigma_threshold;
+  spin_threshold = internal_thresholds ? 0.0 : fp.spin_threshold;
   if (!edens){
     tcell = torch::from_blob(fp.cell, 9, options_dp).view({3,3});
     tgrid = torch::from_blob(fp.grid, 3, options_int);
@@ -72,287 +116,125 @@ void GridFunc::init(func_param fp, int nspin){
 }
 
 void GridFunc::to_cuda(){
-
   model.energy.to(at::kCUDA);
   device = DEVICE_CUDA;
   std::cout << "libnxc:Using CUDA" << std::endl;
-
 }
+
+/* Shared evaluation for LDA (level 0), GGA (1) and meta-GGA (2).
+ *
+ * Host arrays (np grid points; nspin = 1 or 2):
+ *   rho   nspin*np
+ *   sigma 1|3 contracted gradients (aa, ab, bb), or 3|6 gradient components if gamma
+ *   lapl, tau  nspin*np
+ * The model receives (N, 2|5|9) columns rho_a, rho_b, sigma_aa, sigma_ab, sigma_bb,
+ * lapl_a, lapl_b, tau_a, tau_b for the points with rho_a + rho_b > rho_threshold and
+ * returns eps_xc (energy per particle).  Negative rho/sigma_aa/sigma_bb/tau are clipped to
+ * 0; spin densities and sigma_aa, sigma_bb are floored at spin_threshold / sigma_threshold
+ * with the gradient passed through, as in Libxc (skipped for models whose embedded manifest
+ * declares "thresholds": "internal").  Potentials are the gradients of
+ * E = sum_p eps_p (rho_a + rho_b)_p w.r.t. the host arrays (same layout as the inputs);
+ * points below the threshold get exc = v = 0.
+ */
+void GridFunc::evaluate(int level, int np, double rho[], double sigma[], double lapl[], double tau[],
+                        double *exc, double vrho[], double vsigma[], double vlapl[], double vtau[]){
+  const bool pol = (nspin == NXC_POLARIZED);
+  const int ns = pol ? 2 : 1;
+  const int nsig = gamma ? (pol ? 6 : 3) : (pol ? 3 : 1);
+  const int64_t npe = edens ? np : 1;
+
+  torch::Tensor lr, ls, ll, lt;                      // leaves over the host arrays
+  torch::Tensor r = host_leaf(rho, ns, np, interleaved, lr);
+  torch::Tensor rho_ab = pol ? r : r.expand({2, np}) * 0.5;
+
+  std::vector<torch::Tensor> cols = {floored(nonneg(rho_ab.select(0, 0)), spin_threshold),
+                                     floored(nonneg(rho_ab.select(0, 1)), spin_threshold)};
+  if (level >= 1){
+    torch::Tensor s = host_leaf(sigma, nsig, np, interleaved, ls);
+    torch::Tensor saa, sab, sbb;
+    if (gamma){        // gradient components (x, y, z)_a [, (x, y, z)_b]
+      torch::Tensor ga = pol ? s.slice(0, 0, 3) : s * 0.5;
+      torch::Tensor gb = pol ? s.slice(0, 3, 6) : s * 0.5;
+      saa = (ga * ga).sum(0);
+      sab = (ga * gb).sum(0);
+      sbb = (gb * gb).sum(0);
+    }else if (pol){
+      saa = s.select(0, 0); sab = s.select(0, 1); sbb = s.select(0, 2);
+    }else{
+      saa = sab = sbb = s.select(0, 0) * 0.25;
+    }
+    cols.push_back(floored(nonneg(saa), sigma_threshold));
+    cols.push_back(sab);                       // may be negative for polarized densities
+    cols.push_back(floored(nonneg(sbb), sigma_threshold));
+  }
+  if (level >= 2){
+    torch::Tensor l = host_leaf(lapl, ns, np, interleaved, ll);
+    torch::Tensor t = host_leaf(tau, ns, np, interleaved, lt);
+    torch::Tensor l_ab = pol ? l : l.expand({2, np}) * 0.5;
+    torch::Tensor t_ab = pol ? t : t.expand({2, np}) * 0.5;
+    cols.push_back(l_ab.select(0, 0));         // laplacian may be negative: not clipped
+    cols.push_back(l_ab.select(0, 1));
+    cols.push_back(nonneg(t_ab.select(0, 0)));
+    cols.push_back(nonneg(t_ab.select(0, 1)));
+  }
+
+  torch::Tensor rho_sum = rho_ab.sum(0);                       // raw (as in pylibnxc)
+  torch::Tensor filter = (cols[0] + cols[1]).detach() > rho_threshold;
+  torch::Tensor idx = torch::nonzero(filter).reshape({-1});
+  const int64_t nf = idx.size(0);
+
+  if (nf == 0){
+    zero_host(exc, npe, add);
+    zero_host(vrho, (int64_t)ns * np, add);
+    if (level >= 1) zero_host(vsigma, (int64_t)nsig * np, add);
+    if (level >= 2){ zero_host(vlapl, (int64_t)ns * np, add); zero_host(vtau, (int64_t)ns * np, add); }
+    return;
+  }
+
+  torch::Tensor inp = torch::stack(cols, 1).index_select(0, idx);   // (nf, ncol)
+  if (nf == 1) inp = inp.repeat({2, 1});   // models that squeeze() fail on a single point
+  if (device == DEVICE_CUDA) inp = inp.to(at::kCUDA);
+
+  torch::Tensor texc = model.energy.forward({inp}).toTensor().to(torch::kCPU).reshape({-1});
+  if (texc.size(0) != inp.size(0))
+    throw std::runtime_error("libnxc: model returned " + std::to_string(texc.size(0)) +
+                             " values for " + std::to_string(inp.size(0)) + " points");
+  texc = texc.slice(0, 0, nf);
+  if (!torch::isfinite(texc).all().item<bool>()){
+    std::ostringstream msg;
+    msg << "libnxc: non-finite exc at " << (~torch::isfinite(texc)).sum().item<int64_t>() << " of "
+        << nf << " points";
+    throw std::runtime_error(msg.str());
+  }
+  torch::Tensor texc_full = torch::zeros({np}, options_dp).index_put({idx}, texc);
+  torch::Tensor Exc = torch::dot(texc_full, rho_sum);
+  Exc.backward();
+
+  for (auto *leaf : {&lr, &ls, &ll, &lt}){
+    if (leaf->defined() && leaf->grad().defined() && !torch::isfinite(leaf->grad()).all().item<bool>())
+      throw std::runtime_error("libnxc: non-finite potential");
+  }
+
+  if (edens) to_host(texc_full.detach(), exc, np, add);
+  else       to_host(Exc.detach().reshape({1}), exc, 1, add);
+  to_host(lr.grad(), vrho, (int64_t)ns * np, add);
+  if (level >= 1) to_host(ls.grad(), vsigma, (int64_t)nsig * np, add);
+  if (level >= 2){
+    to_host(ll.grad(), vlapl, (int64_t)ns * np, add);
+    to_host(lt.grad(), vtau, (int64_t)ns * np, add);
+  }
+}
+
 void LDAFunc::exc_vxc(int np, double rho[], double * exc, double vrho[]){
-
-    torch::Tensor trho_cud, filter, texc_full;
-    // Assuming row-major order to resolve spin, caution when passing from fortran!
-    torch::Tensor trho = torch::from_blob(rho, np*nspin, options_dp.requires_grad(true));
-    if (device == DEVICE_CUDA){
-      trho_cud = trho.to(at::kCUDA);
-    }else{
-      trho_cud = trho;
-    }
-
-    torch::Tensor rho_inp;
-    rho_inp = trho_cud.view({nspin, np});
-    if (nspin == NXC_UNPOLARIZED){
-        rho_inp = rho_inp.expand({2,-1})*0.5;
-    }
-
-    torch::Tensor trho0 = rho_inp;
-    trho0 = torch::where(trho0 > 0, trho0, torch::zeros_like(trho0));
-    filter = torch::sum(trho0.index({torch::tensor({0,1}),"..."}),0) > 1e-7;
-    trho0 = trho0.index({"...",filter});
-    if (trho0.size(1)==0){
-      for(int i=0; i<np;i++){ //TODO: This is not entirely correct
-        exc[i] = 0;
-        vrho[i] = 0;
-      }
-    }else{
-      torch::Tensor texc, Exc;
-      texc_full = torch::zeros_like(rho_inp.select(0,0));
-      texc = model.energy.forward({trho0.transpose(0,1)}).toTensor().select(1,0);
-      // texc_full = torch::where(filter, texc, texc_full);
-      texc_full.index_put_({filter}, texc);
-      if (!torch::equal(texc,texc)){
-        std::cout << texc.index({filter}) << std::endl;
-        throw ("NaN encountered");
-      }
-
-      Exc = torch::dot(texc_full, torch::sum(rho_inp, 0));
-      Exc.backward();
-
-      if (!torch::equal(trho.grad(),trho.grad())){
-        std::cout << trho.grad().index({filter}) << std::endl;
-        throw ("NaN encountered");
-      }
-      texc_full = texc_full.to(at::kCPU);
-      Exc = Exc.to(at::kCPU);
-      double *vr = trho.grad().data_ptr<double>();
-      int npe;
-      double *e;
-      if (edens){
-        e = texc_full.data_ptr<double>();
-        npe = np;
-      }else{
-        e = Exc.data_ptr<double>();
-        npe = 1;
-      }
-      distribute_v(vr, vrho, nspin, np, 0, 1, add);
-      distribute_v(e, exc, 1, npe, 0, 1, add);
-    }
+  evaluate(0, np, rho, nullptr, nullptr, nullptr, exc, vrho, nullptr, nullptr, nullptr);
 }
 
 void GGAFunc::exc_vxc(int np, double rho[], double sigma[],
         double * exc, double vrho[], double vsigma[]){
-
-
-    torch::Tensor trho_cud, tsigma_cud, sigma_aa, sigma_bb, sigma_ab, tsigma, filter, texc_full;
-    // Assuming row-major order to resolve spin, caution when passing from fortran!
-    torch::Tensor trho = torch::from_blob(rho, np*nspin, options_dp.requires_grad(true));
-    int sigmamult;
-
-    if (gamma){
-      sigmamult = (nspin==NXC_UNPOLARIZED) ? 3 : 6; // Three spin channels for sigma if polarized
-      tsigma = torch::from_blob(sigma, np*sigmamult, options_dp.requires_grad(true));
-    }else{
-      sigmamult = (nspin==NXC_UNPOLARIZED) ? 1 : 3; // Three spin channels for sigma if polarized
-      tsigma = torch::from_blob(sigma, np*sigmamult, options_dp.requires_grad(true));
-    }
-
-    if (device == DEVICE_CUDA){
-      trho_cud = trho.to(at::kCUDA);
-      tsigma_cud = tsigma.to(at::kCUDA);
-    }else{
-      trho_cud = trho;
-      tsigma_cud = tsigma;
-    }
-
-    torch::Tensor rho_inp, sigma_inp;
-    rho_inp = trho_cud.view({nspin, np});
-    sigma_inp = tsigma_cud.view({sigmamult, np});
-    if (nspin == NXC_UNPOLARIZED){
-        rho_inp = rho_inp.expand({2,-1})*0.5;
-        if (gamma){
-          sigma_inp = sigma_inp.repeat({2,1})*0.5;
-        }else{
-          sigma_inp = sigma_inp.expand({3,-1})*0.25;
-        }
-    }
-    if (gamma){
-      sigma_aa = sigma_inp.select(0,0)*sigma_inp.select(0,0) +
-                 sigma_inp.select(0,1)*sigma_inp.select(0,1) +
-                 sigma_inp.select(0,2)*sigma_inp.select(0,2) ;
-      sigma_bb = sigma_inp.select(0,3)*sigma_inp.select(0,3) +
-                 sigma_inp.select(0,4)*sigma_inp.select(0,4) +
-                 sigma_inp.select(0,5)*sigma_inp.select(0,5) ;
-      sigma_ab = sigma_inp.select(0,0)*sigma_inp.select(0,3) +
-                 sigma_inp.select(0,1)*sigma_inp.select(0,4) +
-                 sigma_inp.select(0,2)*sigma_inp.select(0,5) ;
-
-      sigma_inp = torch::cat({sigma_aa.unsqueeze(0), sigma_ab.unsqueeze(0), sigma_bb.unsqueeze(0)});
-    }
-
-    torch::Tensor trho0 = torch::cat({rho_inp, sigma_inp});
-    trho0 = torch::where(trho0 > 0, trho0, torch::zeros_like(trho0));
-    filter = torch::sum(trho0.index({torch::tensor({0,1}),"..."}),0) > 1e-10;
-    trho0 = trho0.index({"...",filter});
-    bool padded_trho0 = false;
-
-    if (trho0.size(1)==1){
-      trho0 = trho0.repeat({1,2});
-      padded_trho0 = true;
-    }
-    if (trho0.size(1)==0){
-      for(int i=0; i<np;i++){ //TODO: This is not entirely correct
-        exc[i] = 0;
-        vrho[i] = 0;
-        vsigma[i] = 0;
-      }
-    }else{
-      torch::Tensor texc, Exc;
-      texc_full = torch::zeros_like(rho_inp.select(0,0));
-      texc = model.energy.forward({trho0.transpose(0,1)}).toTensor().select(1,0);
-      if (padded_trho0)
-        texc = texc.index({"...",0});
-      // texc_full = torch::where(filter, texc, texc_full);
-      texc_full.index_put_({filter}, texc);
-      if (!torch::equal(texc,texc)){
-        std::cout << texc.index({filter}) << std::endl;
-        throw ("NaN encountered");
-      }
-      Exc = torch::dot(texc_full, torch::sum(rho_inp, 0));
-      Exc.backward();
-
-      if (!torch::equal(trho.grad(),trho.grad())){
-        std::cout << trho.grad().index({filter}) << std::endl;
-        throw ("NaN encountered");
-      }
-      texc_full = texc_full.to(at::kCPU);
-      Exc = Exc.to(at::kCPU);
-      double *vr = trho.grad().data_ptr<double>();
-      double *vs = tsigma.grad().data_ptr<double>();
-      int npe;
-      double *e;
-      if (edens){
-        e = texc_full.data_ptr<double>();
-        npe = np;
-      }else{
-        e = Exc.data_ptr<double>();
-        npe = 1;
-      }
-      distribute_v(vr, vrho, nspin, np, 0, 1, add);
-      distribute_v(vs, vsigma, sigmamult, np, 0, 1, add);
-      distribute_v(e, exc, 1, npe, 0, 1, add);
-    }
+  evaluate(1, np, rho, sigma, nullptr, nullptr, exc, vrho, vsigma, nullptr, nullptr);
 }
+
 void MGGAFunc::exc_vxc(int np, double rho[], double sigma[], double lapl[],
-        double tau[], double * exc, double vrho[], double vsigma[], double vlapl[], double vtau[])
-{
-    torch::Tensor trho_cud, tsigma_cud, sigma_aa, sigma_bb,
-      sigma_ab, tsigma, filter, texc_full, tlapl_cud, ttau_cud;
-    // Assuming row-major order to resolve spin, caution when passing from fortran!
-    torch::Tensor trho = torch::from_blob(rho, np*nspin, options_dp.requires_grad(true));
-    int sigmamult;
-
-    if (gamma){
-      sigmamult = (nspin==NXC_UNPOLARIZED) ? 3 : 6; // Three spin channels for sigma if polarized
-      tsigma = torch::from_blob(sigma, np*sigmamult, options_dp.requires_grad(true));
-    }else{
-      sigmamult = (nspin==NXC_UNPOLARIZED) ? 1 : 3; // Three spin channels for sigma if polarized
-      tsigma = torch::from_blob(sigma, np*sigmamult, options_dp.requires_grad(true));
-    }
-    torch::Tensor tlapl = torch::from_blob(lapl, np*nspin, options_dp.requires_grad(true));
-    torch::Tensor ttau = torch::from_blob(tau, np*nspin, options_dp.requires_grad(true));
-
-    if (device == DEVICE_CUDA){
-      trho_cud = trho.to(at::kCUDA);
-      tsigma_cud = tsigma.to(at::kCUDA);
-      tlapl_cud = tlapl.to(at::kCUDA);
-      ttau_cud = ttau.to(at::kCUDA);
-    }else{
-      trho_cud = trho;
-      tsigma_cud = tsigma;
-      tlapl_cud = tlapl;
-      ttau_cud = ttau;
-    }
-
-    torch::Tensor rho_inp, sigma_inp, lapl_inp, tau_inp;
-    rho_inp = trho_cud.view({nspin, np});
-    sigma_inp = tsigma_cud.view({sigmamult, np});
-    lapl_inp = tlapl_cud.view({nspin, np});
-    tau_inp = ttau_cud.view({nspin, np});
-
-    if (nspin == NXC_UNPOLARIZED){
-        rho_inp = rho_inp.expand({2,-1})*0.5;
-        if (gamma){
-          sigma_inp = sigma_inp.repeat({2,1})*0.5;
-        }else{
-          sigma_inp = sigma_inp.expand({3,-1})*0.25;
-        }
-        tau_inp = tau_inp.expand({2,-1})*0.5;
-        lapl_inp = lapl_inp.expand({2,-1})*0.5;
-    }
-
-    if (gamma){
-      sigma_aa = sigma_inp.select(0,0)*sigma_inp.select(0,0) +
-                 sigma_inp.select(0,1)*sigma_inp.select(0,1) +
-                 sigma_inp.select(0,2)*sigma_inp.select(0,2) ;
-      sigma_bb = sigma_inp.select(0,3)*sigma_inp.select(0,3) +
-                 sigma_inp.select(0,4)*sigma_inp.select(0,4) +
-                 sigma_inp.select(0,5)*sigma_inp.select(0,5) ;
-      sigma_ab = sigma_inp.select(0,0)*sigma_inp.select(0,3) +
-                 sigma_inp.select(0,1)*sigma_inp.select(0,4) +
-                 sigma_inp.select(0,2)*sigma_inp.select(0,5) ;
-
-      sigma_inp = torch::cat({sigma_aa.unsqueeze(0), sigma_ab.unsqueeze(0), sigma_bb.unsqueeze(0)});
-    }
-
-    torch::Tensor trho0 = torch::cat({rho_inp, sigma_inp, lapl_inp, tau_inp});
-    trho0 = torch::where(trho0 > 0, trho0, torch::zeros_like(trho0));
-    filter = torch::sum(trho0.index({torch::tensor({0,1}),"..."}),0) > 1e-10;
-    trho0 = trho0.index({"...",filter});
-    if (trho0.size(1)==0){
-      for(int i=0; i<np;i++){ //TODO: This is not entirely correct
-        exc[i] = 0;
-        vrho[i] = 0;
-        vsigma[i] = 0;
-        vlapl[i]=0;
-        vtau[i]=0;
-      }
-    }else{
-      torch::Tensor texc, Exc;
-      texc_full = torch::zeros_like(rho_inp.select(0,0));
-      texc = model.energy.forward({trho0.transpose(0,1)}).toTensor().select(1,0);
-      // texc_full = torch::where(filter, texc, texc_full);
-      texc_full.index_put_({filter}, texc);
-      if (!torch::equal(texc,texc)){
-        std::cout << texc.index({filter}) << std::endl;
-        throw ("NaN encountered");
-      }
-
-      Exc = torch::dot(texc_full, torch::sum(rho_inp, 0));
-      Exc.backward();
-
-      if (!torch::equal(trho.grad(),trho.grad())){
-        std::cout << trho.grad().index({filter}) << std::endl;
-        throw ("NaN encountered");
-      }
-      texc_full = texc_full.to(at::kCPU);
-      Exc = Exc.to(at::kCPU);
-      double *vr = trho.grad().data_ptr<double>();
-      double *vs = tsigma.grad().data_ptr<double>();
-      double *vl = tlapl.grad().data_ptr<double>();
-      double *vt = ttau.grad().data_ptr<double>();
-      int npe;
-      double *e;
-      if (edens){
-        e = texc.data_ptr<double>();
-        npe = np;
-      }else{
-        e = Exc.data_ptr<double>();
-        npe = 1;
-      }
-      distribute_v(vr, vrho, nspin, np, 0, 1, add);
-      distribute_v(vt, vtau, nspin, np, 0, 1, add);
-      distribute_v(vl, vlapl, nspin, np, 0, 1, add);
-      distribute_v(vs, vsigma, sigmamult, np, 0, 1, add);
-      distribute_v(e, exc, 1, npe, 0, 1, add);
-    }
+        double tau[], double * exc, double vrho[], double vsigma[], double vlapl[], double vtau[]){
+  evaluate(2, np, rho, sigma, lapl, tau, exc, vrho, vsigma, vlapl, vtau);
 }
