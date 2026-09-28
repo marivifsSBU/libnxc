@@ -103,6 +103,8 @@ void GridFunc::init(func_param fp, int nspin){
   rho_threshold = fp.rho_threshold;
   sigma_threshold = internal_thresholds ? 0.0 : fp.sigma_threshold;
   spin_threshold = internal_thresholds ? 0.0 : fp.spin_threshold;
+  tau_threshold = internal_thresholds ? 0.0 : fp.tau_threshold;
+  tau_w_cap = internal_thresholds ? false : (fp.tau_w_cap != 0);
   if (!edens){
     tcell = torch::from_blob(fp.cell, 9, options_dp).view({3,3});
     tgrid = torch::from_blob(fp.grid, 3, options_int);
@@ -131,8 +133,9 @@ void GridFunc::to_cuda(){
  * lapl_a, lapl_b, tau_a, tau_b for the points with rho_a + rho_b > rho_threshold and
  * returns eps_xc (energy per particle).  Negative rho/sigma_aa/sigma_bb/tau are clipped to
  * 0; spin densities and sigma_aa, sigma_bb are floored at spin_threshold / sigma_threshold
- * with the gradient passed through, as in Libxc (skipped for models whose embedded manifest
- * declares "thresholds": "internal").  Potentials are the gradients of
+ * with the gradient passed through, as in Libxc; for meta-GGAs sigma_ss is capped at
+ * 8 rho_s tau_s (Libxc's Fermi-hole curvature enforcement).  All skipped for models whose
+ * embedded manifest declares "thresholds": "internal".  Potentials are the gradients of
  * E = sum_p eps_p (rho_a + rho_b)_p w.r.t. the host arrays (same layout as the inputs);
  * points below the threshold get exc = v = 0.
  */
@@ -174,8 +177,18 @@ void GridFunc::evaluate(int level, int np, double rho[], double sigma[], double 
     torch::Tensor t_ab = pol ? t : t.expand({2, np}) * 0.5;
     cols.push_back(l_ab.select(0, 0));         // laplacian may be negative: not clipped
     cols.push_back(l_ab.select(0, 1));
-    cols.push_back(nonneg(t_ab.select(0, 0)));
-    cols.push_back(nonneg(t_ab.select(0, 1)));
+    cols.push_back(floored(nonneg(t_ab.select(0, 0)), tau_threshold));
+    cols.push_back(floored(nonneg(t_ab.select(0, 1)), tau_threshold));
+    if (tau_w_cap){
+      // Libxc (>= 5) enforces the Fermi-hole curvature tau_s >= tau_W,s for meta-GGAs by
+      // capping sigma_ss <= 8 rho_s tau_s, with derivatives evaluated at the capped point.
+      // Matters with nonlinear core corrections (core density without core tau).
+      for (int s2 = 0; s2 < 2; ++s2){
+        torch::Tensor &sg = cols[2 + 2 * s2];
+        torch::Tensor cap = 8.0 * cols[s2] * cols[7 + s2];
+        sg = sg + (torch::minimum(sg, cap) - sg).detach();
+      }
+    }
   }
 
   torch::Tensor rho_sum = rho_ab.sum(0);                       // raw (as in pylibnxc)

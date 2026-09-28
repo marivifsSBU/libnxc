@@ -49,6 +49,8 @@ class GridFunc : public NXCFunc{
     double sigma_threshold = 1e-40;
     double spin_threshold = 1e-15;
     bool internal_thresholds = false;   // model handles empty channels / sigma = 0 itself
+    double tau_threshold = 1e-20;
+    bool tau_w_cap = true;               // meta-GGA: sigma_ss <= 8 rho_s tau_s (as Libxc)
     torch::Tensor tcell, tgrid, V_cell;
     // shared LDA (level 0) / GGA (1) / meta-GGA (2) evaluation, see gridfunc.cpp
     void evaluate(int level, int np, double rho[], double sigma[], double lapl[], double tau[],

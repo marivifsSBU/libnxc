@@ -87,6 +87,10 @@ class GridFunc(NXCFunctional):
     # "thresholds": "internal" in their embedded manifest (exporter models).
     _spin_floor = 1e-15
     _sigma_floor = 1e-40
+    # meta-GGAs: sigma_ss capped at 8 rho_s tau_s (Libxc's Fermi-hole curvature enforcement,
+    # derivatives at the capped point); relevant with nonlinear core corrections
+    _tau_w_cap = True
+    _tau_floor = 1e-20
 
     def compute(self, inp, do_exc=True, do_vxc=True, **kwargs):
         """ Evaluate the functional on a given input
@@ -177,8 +181,14 @@ class GridFunc(NXCFunctional):
                 tau_a.unsqueeze(-1)))  # Expects laplacian in input
             torch_inputs.append(torch.zeros_like(
                 tau_b.unsqueeze(-1)))  # even though not used
-            torch_inputs.append(nonneg(tau_a).unsqueeze(-1))
-            torch_inputs.append(nonneg(tau_b).unsqueeze(-1))
+            ta_, tb_ = floor(tau_a, self._tau_floor), floor(tau_b, self._tau_floor)
+            if self._tau_w_cap and not self.internal_thresholds:
+                ra_, rb_ = torch_inputs[0][:, 0], torch_inputs[1][:, 0]
+                sa_, sb_ = torch_inputs[2][:, 0], torch_inputs[4][:, 0]
+                torch_inputs[2] = (sa_ + (torch.minimum(sa_, 8 * ra_ * ta_) - sa_).detach()).unsqueeze(-1)
+                torch_inputs[4] = (sb_ + (torch.minimum(sb_, 8 * rb_ * tb_) - sb_).detach()).unsqueeze(-1)
+            torch_inputs.append(ta_.unsqueeze(-1))
+            torch_inputs.append(tb_.unsqueeze(-1))
 
         torch_inputs = torch.cat(torch_inputs, dim=-1)
         exc = self.energy_model(torch_inputs)[:, 0]
@@ -209,6 +219,9 @@ class GridFunc(NXCFunctional):
 
 class HMFunc(GridFunc):
     _gamma_eps = 1e-7
+    # Nagai's reference implementation has no Fermi-hole-curvature cap (and _gamma_eps,
+    # added to sigma, would push sigma above 8 rho tau in the tails)
+    _tau_w_cap = False
 
 
 class AtomicFunc(NXCFunctional):

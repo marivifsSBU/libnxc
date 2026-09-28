@@ -28,6 +28,9 @@ const int NXC_UNPOLARIZED=1;
 *        these values with the gradient passed through (derivatives evaluated at the floored
 *        point, as in Libxc; defaults 1e-15 and 1e-40 = 1e-15^(8/3)).  Not applied to models
 *        whose embedded manifest declares "thresholds": "internal" (exporter models).
+* @param tau_threshold meta-GGAs: tau_s floored at this value, gradient passed through (1e-20)
+* @param tau_w_cap meta-GGAs: cap sigma_ss at 8 rho_s tau_s after the floors (Libxc's Fermi-hole
+*        curvature enforcement; default 1; not applied to "thresholds": "internal" models)
 */
 struct func_param{
   double * pos; // atomic positions
@@ -46,6 +49,8 @@ struct func_param{
   double rho_threshold = defaults->rho_threshold;
   double sigma_threshold = defaults->sigma_threshold;
   double spin_threshold = defaults->spin_threshold;
+  double tau_threshold = defaults->tau_threshold;
+  int tau_w_cap = defaults->tau_w_cap;
 };
 
 
