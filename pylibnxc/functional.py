@@ -37,12 +37,15 @@ def LibNXCFunctional(name, **kwargs):
         path = name
     elif os.path.exists(os.path.join(model_path, name)):
         path = os.path.join(model_path, name)
+    elif os.path.exists(os.path.join(model_path, name.upper())):
+        path = os.path.join(model_path, name.upper())
     else:
         raise ValueError(
             'Model {} could not be found, please check name/path'.format(name))
 
     if kwargs.get('kind', 'grid').lower() == 'grid':
-        if 'HM' in name:
+        # Nagai et al. "hidden messages" models: LDA_HM, GGA_HM, MGGA_HM
+        if os.path.basename(os.path.normpath(path)).split('_')[-1] == 'HM':
             func = HMFunc(path)
         else:
             func = GridFunc(path)
