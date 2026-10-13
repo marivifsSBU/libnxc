@@ -4,7 +4,7 @@ title: "libnxc: machine-learned exchange-correlation functionals for electronic-
 version: 2.0.0
 date-released: 2026-10-13
 license: MPL-2.0
-repository-code: "https://github.com/OWNER/libnxc"
+repository-code: "https://github.com/marivifsSBU/libnxc"
 authors:
   - family-names: Fernández-Serra
     given-names: Marivi
