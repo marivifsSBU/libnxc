@@ -1,5 +1,7 @@
 # Lib**n**xc
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23345687.svg)](https://doi.org/10.5281/zenodo.23345687)
+
 libnxc is a library for running **machine-learned exchange-correlation functionals**
 (LDA, GGA, meta-GGA, and NeuralXC-type) inside density functional theory codes. It is
 written in C++ with Fortran bindings and mirrors the API of [Libxc](https://libxc.gitlab.io),
@@ -167,8 +169,12 @@ See [AUTHORS.md](AUTHORS.md) and [CHANGELOG.md](CHANGELOG.md).
 
 ## Citing
 
-If you use libnxc, please cite this repository ([CITATION.cff](CITATION.cff)) and the papers
-of the functionals you use:
+If you use libnxc, please cite the software and the papers of the functionals you use.
+Software: M. Fernández-Serra and S. Dick, *libnxc: machine-learned exchange-correlation
+functionals for electronic-structure codes*, version 2.0.0 (2026), Zenodo,
+[doi:10.5281/zenodo.23345687](https://doi.org/10.5281/zenodo.23345687)
+(see [CITATION.cff](CITATION.cff); the DOI resolves to the latest version, 2.0.0 is
+[10.5281/zenodo.23345688](https://doi.org/10.5281/zenodo.23345688)). Papers:
 
 1. S. Dick and M. Fernández-Serra, *Machine learning accurate exchange and correlation
    functionals of the electronic density*, Nat. Commun. **11**, 3509 (2020).

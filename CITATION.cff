@@ -5,6 +5,14 @@ version: 2.0.0
 date-released: 2026-10-13
 license: MPL-2.0
 repository-code: "https://github.com/marivifsSBU/libnxc"
+doi: 10.5281/zenodo.23345687
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.23345687
+    description: "Concept DOI (resolves to the latest version)"
+  - type: doi
+    value: 10.5281/zenodo.23345688
+    description: "libnxc 2.0.0"
 authors:
   - family-names: Fernández-Serra
     given-names: Marivi
