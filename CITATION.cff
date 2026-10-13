@@ -1,0 +1,36 @@
+cff-version: 1.2.0
+message: "If you use libnxc, please cite it as below, together with the papers of the functionals you use (see README)."
+title: "libnxc: machine-learned exchange-correlation functionals for electronic-structure codes"
+version: 2.0.0
+date-released: 2026-10-13
+license: MPL-2.0
+repository-code: "https://github.com/OWNER/libnxc"
+authors:
+  - family-names: Fernández-Serra
+    given-names: Marivi
+    affiliation: Stony Brook University
+  - family-names: Dick
+    given-names: Sebastian
+references:
+  - type: article
+    authors:
+      - family-names: Dick
+        given-names: Sebastian
+      - family-names: Fernández-Serra
+        given-names: Marivi
+    title: "Machine learning accurate exchange and correlation functionals of the electronic density"
+    journal: Nature Communications
+    volume: 11
+    start: 3509
+    year: 2020
+  - type: article
+    authors:
+      - family-names: Dick
+        given-names: Sebastian
+      - family-names: Fernández-Serra
+        given-names: Marivi
+    title: "Highly accurate and constrained density functional obtained with differentiable programming"
+    journal: Physical Review B
+    volume: 104
+    start: L161109
+    year: 2021

@@ -1,0 +1,121 @@
+{
+ "recipe": "sara_unpol_log10",
+ "model_dir": "GGA_XC_PBECLONE_UNPOL_S05R1",
+ "tol": 1e-10,
+ "cases": {
+  "random_unpol": {
+   "npoints": 4000,
+   "passed": true,
+   "zk": {
+    "max_abs": 2.6645352591003757e-15,
+    "max_ref": 5.8387576825663166,
+    "rel": 4.56353115502e-16,
+    "finite": true
+   },
+   "vrho": {
+    "max_abs": 1.6076029396572267e-13,
+    "max_ref": 7.182089901774808,
+    "rel": 2.2383497862648064e-14,
+    "finite": true
+   },
+   "vsigma": {
+    "max_abs": 7.576495409011841e-05,
+    "max_ref": 94348937.79709634,
+    "rel": 8.03029221728558e-13,
+    "finite": true
+   }
+  },
+  "random_pol_zeta0": {
+   "npoints": 4000,
+   "passed": true,
+   "zk": {
+    "max_abs": 2.6645352591003757e-15,
+    "max_ref": 5.864650773594405,
+    "rel": 4.543382653060005e-16,
+    "finite": true
+   },
+   "vrho": {
+    "max_abs": 1.6253665080512292e-13,
+    "max_ref": 7.188459968251795,
+    "rel": 2.261077498142501e-14,
+    "finite": true
+   },
+   "vsigma": {
+    "max_abs": 4.357099533081055e-05,
+    "max_ref": 180696007.95986176,
+    "rel": 2.411287101621472e-13,
+    "finite": true
+   }
+  },
+  "mol_H2O_unpol": {
+   "npoints": 30632,
+   "passed": true,
+   "zk": {
+    "max_abs": 1.7763568394002505e-15,
+    "max_ref": 4.945150309606029,
+    "rel": 3.59211900182215e-16,
+    "finite": true
+   },
+   "vrho": {
+    "max_abs": 2.1316282072803006e-14,
+    "max_ref": 6.562456573477399,
+    "rel": 3.2482168581433614e-15,
+    "finite": true
+   },
+   "vsigma": {
+    "max_abs": 2.009836741478921e-12,
+    "max_ref": 3.782674775406011,
+    "rel": 5.313268681057034e-13,
+    "finite": true
+   }
+  },
+  "batch_1_unpol": {
+   "npoints": 1,
+   "passed": true,
+   "zk": {
+    "max_abs": 0.0,
+    "max_ref": 1.0,
+    "rel": 0.0,
+    "finite": true
+   },
+   "vrho": {
+    "max_abs": 0.0,
+    "max_ref": 1.0,
+    "rel": 0.0,
+    "finite": true
+   },
+   "vsigma": {
+    "max_abs": 0.0,
+    "max_ref": 1.0,
+    "rel": 0.0,
+    "finite": true
+   }
+  },
+  "batch_1_pol": {
+   "npoints": 1,
+   "passed": true,
+   "zk": {
+    "max_abs": 0.0,
+    "max_ref": 1.0,
+    "rel": 0.0,
+    "finite": true
+   },
+   "vrho": {
+    "max_abs": 0.0,
+    "max_ref": 1.0,
+    "rel": 0.0,
+    "finite": true
+   },
+   "vsigma": {
+    "max_abs": 0.0,
+    "max_ref": 1.0,
+    "rel": 0.0,
+    "finite": true
+   }
+  },
+  "refuses_polarized": {
+   "passed": true
+  }
+ },
+ "passed": true
+}

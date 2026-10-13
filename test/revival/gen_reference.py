@@ -127,10 +127,16 @@ def main(outdir, extra=None):
     shipped = os.path.join(HERE, '..', '..', 'models')
     models = [(os.path.join(shipped, m), True) for m in
               ('LDA_X_NUEG', 'GGA_XC_PBE', 'MGGA_XC_SCAN', 'MGGA_XC_XCDIFF')]
-    if extra and os.path.isdir(extra):
-        for m in sorted(os.listdir(extra)):
-            if os.path.exists(os.path.join(extra, m, 'xc')):
-                models.append((os.path.join(extra, m), not ('UNPOL' in m)))
+    # exported models in the repository (they carry a manifest.json), then any extra directory
+    for root, only_exported in ((shipped, True), (extra, False)):
+        if not root or not os.path.isdir(root):
+            continue
+        for m in sorted(os.listdir(root)):
+            if not os.path.exists(os.path.join(root, m, 'xc')):
+                continue
+            if only_exported and not os.path.exists(os.path.join(root, m, 'manifest.json')):
+                continue
+            models.append((os.path.join(root, m), not ('UNPOL' in m)))
     lines = []
     for mdir, polarized_ok in models:
         name = os.path.basename(mdir)

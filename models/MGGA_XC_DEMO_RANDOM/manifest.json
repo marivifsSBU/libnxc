@@ -1,0 +1,92 @@
+{
+ "name": "MGGA_XC_DEMO_RANDOM",
+ "recipe": "demo_mgga_alpha",
+ "family": "MGGA",
+ "polarized": true,
+ "interface": "libnxc grid: x (N,9) float64 -> eps_xc (N,1)",
+ "thresholds": "internal",
+ "sources": {
+  "fx": {
+   "prefix": "source/MGGA_Fx_demo_d3_n16_s7",
+   "meta": {
+    "depth": 3,
+    "nodes": 16,
+    "seed": 7,
+    "name": "MGGA_Fx_demo",
+    "lob_lim": 1.804
+   },
+   "sha256": "38540eabca913621765b57a16a894f9aae8028e600e0cb7b471cf56277e9093a"
+  },
+  "fc": {
+   "prefix": "source/MGGA_Fc_demo_d3_n16_s11",
+   "meta": {
+    "depth": 3,
+    "nodes": 16,
+    "seed": 11,
+    "name": "MGGA_Fc_demo",
+    "lob_lim": 2.0
+   },
+   "sha256": "24d8c2186626b4beaa56dfd25cf5efb5cd7fe47f417bea16b43b73be9305653d"
+  }
+ },
+ "networks": {
+  "fx": {
+   "cls": "MGGA_Fx_demo",
+   "mode": "lob",
+   "lob": 1.804,
+   "activation": "gelu[tanh]",
+   "layers": [
+    [
+     16,
+     2
+    ],
+    [
+     16,
+     16
+    ],
+    [
+     16,
+     16
+    ],
+    [
+     1,
+     16
+    ]
+   ]
+  },
+  "fc": {
+   "cls": "MGGA_Fc_demo",
+   "mode": "lob",
+   "lob": 2.0,
+   "activation": "gelu[tanh]",
+   "layers": [
+    [
+     16,
+     4
+    ],
+    [
+     16,
+     16
+    ],
+    [
+     16,
+     16
+    ],
+    [
+     1,
+     16
+    ]
+   ]
+  }
+ },
+ "constants": {
+  "RHO_MIN": 1e-10,
+  "EPS_LOG": 1e-05
+ },
+ "created": "2026-09-28T15:27:27",
+ "versions": {
+  "torch": "2.14.0",
+  "jax": "0.7.2",
+  "equinox": "0.13.8"
+ }
+}

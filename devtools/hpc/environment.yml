@@ -1,0 +1,22 @@
+# Build/test environment for libnxc on Linux clusters (x86_64, CPU).
+# torch comes from the CPU wheel index and must match the version that exported the
+# models (2.14.0, TorchScript archive format 10).
+name: nxc-build
+channels: [conda-forge]
+dependencies:
+  - python=3.12
+  - numpy
+  - scipy
+  - h5py
+  - pytest
+  - cmake>=3.18
+  - ninja
+  - c-compiler
+  - cxx-compiler          # GCC >= 11 needed: libtorch 2.14 requires C++20
+  - fortran-compiler
+  - libopenblas=*=*pthreads*   # the OpenMP build loads a second libomp next to torch's
+  - pip
+  - pip:
+    - --extra-index-url https://download.pytorch.org/whl/cpu
+    - torch==2.14.0+cpu      # CPU wheel: the CUDA wheel's CMake config needs a CUDA toolkit
+    - pyscf==2.10.0

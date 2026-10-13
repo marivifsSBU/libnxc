@@ -1,0 +1,6 @@
+{
+ "name": "LDA_X_SLATERTWIN",
+ "thresholds": "internal",
+ "twin_of": "SLA-NOC-NOGX-NOGC",
+ "note": "analytic twin for validating the QE-libnxc hook"
+}

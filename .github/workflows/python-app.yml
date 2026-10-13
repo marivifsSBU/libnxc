@@ -1,32 +1,25 @@
-# This workflow will install Python dependencies, run tests and lint with a single version of Python
-# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
-
-name: pylibnxc test
+name: pylibnxc and exporter tests
 
 on:
   push:
-    branches: [ master ]
+    branches: [ main ]
   pull_request:
-    branches: [ master ]
+    branches: [ main ]
 
 jobs:
-  build:
-
+  test:
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v2
-    - name: Set up Python 3.6
-      uses: actions/setup-python@v2
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
       with:
-        python-version: 3.6
+        python-version: '3.12'
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e .
-    - name: Test with pytest
-      run: |
-        python -c 'import pylibnxc'
-        pytest -v --cov pylibnxc
-    - name: Upload to codecov
-      uses: codecov/codecov-action@v1
+        pip install --extra-index-url https://download.pytorch.org/whl/cpu torch==2.14.0+cpu
+        pip install -e .[test,export]
+    - name: pylibnxc tests
+      run: cd pylibnxc/tests && python -m pytest -q -W ignore::FutureWarning .
+    - name: exporter tests
+      run: python -m pytest -q -W ignore::FutureWarning exporter/tests

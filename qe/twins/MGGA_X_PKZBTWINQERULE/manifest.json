@@ -1,0 +1,6 @@
+{
+ "name": "MGGA_X_PKZBTWINQERULE",
+ "thresholds": "internal",
+ "twin_of": "PKZB twin with QE polarized threshold rule (diagnostic)",
+ "note": "analytic twin for validating the QE-libnxc hook"
+}

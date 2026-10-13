@@ -1,0 +1,92 @@
+{
+ "name": "GGA_XC_PBECLONE_TL",
+ "recipe": "xcdiff_pol",
+ "family": "GGA",
+ "polarized": true,
+ "interface": "libnxc grid: x (N,5) float64 -> eps_xc (N,1)",
+ "thresholds": "internal",
+ "sources": {
+  "fx": {
+   "prefix": "source/GGA_Fx_xcdiff_d3_n16_s42_v_20000",
+   "meta": {
+    "depth": 3,
+    "nodes": 16,
+    "seed": 42,
+    "name": "GGA_Fx_xcdiff",
+    "lob_lim": 1.804
+   },
+   "sha256": "4a02f95585c5e2f5cf2cab60a7d536e651ede6b47db5b1d6e01447c2ac955dd2"
+  },
+  "fc": {
+   "prefix": "source/GGA_Fc_xcdiff_d3_n16_s42_v_20000",
+   "meta": {
+    "depth": 3,
+    "nodes": 16,
+    "seed": 42,
+    "name": "GGA_Fc_xcdiff",
+    "lob_lim": 2.0
+   },
+   "sha256": "54fecf4ecd0b125029efecc5cd9e234a1739dacb7d2ac8c3bc264939fe136b0c"
+  }
+ },
+ "networks": {
+  "fx": {
+   "cls": "GGA_Fx_xcdiff",
+   "mode": "lin",
+   "lob": 1.804,
+   "activation": "gelu[tanh]",
+   "layers": [
+    [
+     16,
+     1
+    ],
+    [
+     16,
+     16
+    ],
+    [
+     16,
+     16
+    ],
+    [
+     1,
+     16
+    ]
+   ]
+  },
+  "fc": {
+   "cls": "GGA_Fc_xcdiff",
+   "mode": "lin",
+   "lob": 2.0,
+   "activation": "gelu[tanh]",
+   "layers": [
+    [
+     16,
+     3
+    ],
+    [
+     16,
+     16
+    ],
+    [
+     16,
+     16
+    ],
+    [
+     1,
+     16
+    ]
+   ]
+  }
+ },
+ "constants": {
+  "RHO_MIN": 1e-10,
+  "EPS_LOG": 1e-05
+ },
+ "created": "2026-09-28T15:26:50",
+ "versions": {
+  "torch": "2.14.0",
+  "jax": "0.7.2",
+  "equinox": "0.13.8"
+ }
+}

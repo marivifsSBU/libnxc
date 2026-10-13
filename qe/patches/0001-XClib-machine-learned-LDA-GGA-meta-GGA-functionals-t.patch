@@ -1,0 +1,568 @@
+From f714b00ad19bbce5b662ade07ff23db243e0d602 Mon Sep 17 00:00:00 2001
+From: Marivi Fernandez-Serra <Marivi.Fernandez-Serra@stonybrook.edu>
+Date: Mon, 28 Sep 2026 16:33:38 -0400
+Subject: [PATCH] XClib: machine-learned LDA/GGA/meta-GGA functionals through
+ libnxc (input_dft='NXC')
+
+- xc_nxc.f90: calls libnxc's Fortran module (nxc) for the whole functional; model
+  directory from $NXC_MODEL, family (LDA_/GGA_/MGGA_) from its name.  Conventions of
+  the XClib wrappers (Hartree; LDA energy per particle, GGA/MGGA energy per volume,
+  v2 = 2 dE/dsigma_ss, v2c_ud / meta v2c cross terms, tau in Libxc units); LSDA
+  (rho, m) converted as in QE's LSDA drivers.
+- intercepts in xc (LDA family), xc_gcx (GGA family) and xc_metagcx (meta-GGA);
+  PBE/TPSS indices are set only as placeholders so that PW computes gradients/tau;
+  dmxc/dgcxc (DFPT) stop with an error for NXC.
+- CMake: -DQE_ENABLE_NXC=ON -DNXC_ROOT=<libnxc build/install>.
+
+Validated with analytic twins through libnxc (Slater, QE's PBE, Libxc PKZB and LTA
+meta-GGA exchange) against QE-native / QE+Libxc runs: Si, BN, Mo, ferromagnetic
+Fe and an N atom; energies, forces and stresses agree (to 1e-8 Ry where QE's own
+thresholds do not differ).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ CMakeLists.txt                  |  21 +++
+ XClib/CMakeLists.txt            |   4 +-
+ XClib/Makefile                  |   1 +
+ XClib/dft_setting_params.f90    |   5 +
+ XClib/dft_setting_routines.f90  |  10 ++
+ XClib/xc_nxc.f90                | 278 ++++++++++++++++++++++++++++++++
+ XClib/xc_wrapper_d_gga.f90      |   3 +
+ XClib/xc_wrapper_d_lda_lsda.f90 |   3 +
+ XClib/xc_wrapper_gga.f90        |  11 +-
+ XClib/xc_wrapper_lda_lsda.f90   |   8 +-
+ XClib/xc_wrapper_mgga.f90       |   9 +-
+ 11 files changed, 349 insertions(+), 4 deletions(-)
+ create mode 100644 XClib/xc_nxc.f90
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index d394cb4..dbcd122 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -97,6 +97,9 @@ cmake_dependent_option(QE_ENABLE_SCALAPACK_QRCP
+     OFF "QE_ENABLE_SCALAPACK" OFF)
+ option(QE_ENABLE_ELPA
+     "enable ELPA execution units" OFF)
++option(QE_ENABLE_NXC
++    "enable libnxc (machine-learned functionals, input_dft='NXC')" OFF)
++set(NXC_ROOT "" CACHE PATH "libnxc build or install directory (libnxc, nxc_fortran, nxc.mod)")
+ option(QE_ENABLE_LIBXC
+     "enable LIBXC execution units" OFF)
+ option(QE_ENABLE_HDF5
+@@ -589,6 +592,24 @@ if(QE_ENABLE_LIBXC)
+     endif()
+ endif(QE_ENABLE_LIBXC)
+ 
++###########################################################
++# libnxc (machine-learned functionals, input_dft='NXC')
++###########################################################
++add_library(qe_external_nxc INTERFACE)
++qe_install_targets(qe_external_nxc)
++if(QE_ENABLE_NXC)
++    find_library(NXC_LIBRARY nxc HINTS ${NXC_ROOT} ${NXC_ROOT}/lib REQUIRED)
++    find_library(NXC_FORTRAN_LIBRARY nxc_fortran HINTS ${NXC_ROOT} ${NXC_ROOT}/lib REQUIRED)
++    find_path(NXC_MODULE_DIR nxc.mod
++              HINTS ${NXC_ROOT}/fortran_modules ${NXC_ROOT}/include/nxc REQUIRED)
++    get_filename_component(NXC_LIBDIR "${NXC_LIBRARY}" DIRECTORY)
++    message(STATUS "libnxc: ${NXC_LIBRARY}")
++    target_compile_definitions(qe_external_nxc INTERFACE "__NXC")
++    target_include_directories(qe_external_nxc INTERFACE ${NXC_MODULE_DIR})
++    target_link_libraries(qe_external_nxc INTERFACE ${NXC_FORTRAN_LIBRARY} ${NXC_LIBRARY})
++    target_link_options(qe_external_nxc INTERFACE "LINKER:-rpath,${NXC_LIBDIR}")
++endif()
++
+ ###########################################################
+ # HDF5
+ # The following targets will be defined:
+diff --git a/XClib/CMakeLists.txt b/XClib/CMakeLists.txt
+index 2feba23..24ea4f5 100644
+--- a/XClib/CMakeLists.txt
++++ b/XClib/CMakeLists.txt
+@@ -22,7 +22,8 @@ set(sources_xclib
+     xc_wrapper_d_lda_lsda.f90
+     xc_wrapper_gga.f90
+     xc_wrapper_lda_lsda.f90
+-    xc_wrapper_mgga.f90)
++    xc_wrapper_mgga.f90
++    xc_nxc.f90)
+     
+ qe_add_library(qe_xclib ${sources_xclib})
+ target_link_libraries(qe_xclib
+@@ -32,6 +33,7 @@ target_link_libraries(qe_xclib
+     PRIVATE
+         qe_openmp_fortran
+         qe_external_libxc
++        qe_external_nxc
+         qe_libbeef)
+ 
+ ###########################################################
+diff --git a/XClib/Makefile b/XClib/Makefile
+index be1e8a8..6f7b075 100644
+--- a/XClib/Makefile
++++ b/XClib/Makefile
+@@ -10,6 +10,7 @@ xclib_error.o \
+ qe_kind.o \
+ qe_constants.o \
+ dft_setting_params.o \
++xc_nxc.o \
+ dft_setting_routines.o \
+ qe_dft_list.o \
+ qe_funct_corr_lda_lsda.o \
+diff --git a/XClib/dft_setting_params.f90 b/XClib/dft_setting_params.f90
+index 1087160..379c94e 100644
+--- a/XClib/dft_setting_params.f90
++++ b/XClib/dft_setting_params.f90
+@@ -27,6 +27,11 @@ MODULE dft_setting_params
+     !! maximum number of libxc flags per functional
+     !
+     LOGICAL :: is_libxc(6) = .FALSE.
++    !! libnxc (machine-learned functionals, input_dft='NXC', model in $NXC_MODEL)
++    LOGICAL :: is_nxc = .FALSE.
++    INTEGER :: nxc_family = 0
++    !! 1 LDA, 2 GGA, 3 meta-GGA
++    CHARACTER(LEN=512) :: nxc_model = ' '
+     !! \(\text{is_libxc(i)}=TRUE\) if the i-th term of the input 
+     !! functional is from Libxc
+     !
+diff --git a/XClib/dft_setting_routines.f90 b/XClib/dft_setting_routines.f90
+index 94362ef..25a0090 100644
+--- a/XClib/dft_setting_routines.f90
++++ b/XClib/dft_setting_routines.f90
+@@ -51,6 +51,7 @@ CONTAINS
+     USE qe_dft_list,         ONLY: nxc, ncc, ngcx, ngcc, nmeta, get_IDs_from_shortname, &
+                                    dft_LDAx_name, dft_LDAc_name, dft_GGAx_name,         &
+                                    dft_GGAc_name, dft_MGGA_name
++    USE xc_nxc,              ONLY: nxc_select
+     !
+     IMPLICIT NONE
+     !
+@@ -93,6 +94,15 @@ CONTAINS
+        dftout(l:l) = capital( dft_(l:l) )
+     ENDDO
+     !
++    ! ... machine-learned functional through libnxc (model directory in $NXC_MODEL)
++    !
++    IF ( TRIM(dftout) == 'NXC' ) THEN
++       CALL nxc_select( iexch, icorr, igcx, igcc, imeta, imetac )
++       dft = dftout
++       dft_defined = xclib_set_dft_IDs( iexch, icorr, igcx, igcc, imeta, imetac )
++       RETURN
++    ENDIF
++    !
+     ! ----------------------------------------------
+     ! NOW WE CHECK ALL THE SHORT NAMES
+     ! Note: comparison is done via exact matching
+diff --git a/XClib/xc_nxc.f90 b/XClib/xc_nxc.f90
+new file mode 100644
+index 0000000..e1cfd24
+--- /dev/null
++++ b/XClib/xc_nxc.f90
+@@ -0,0 +1,278 @@
++!
++! Copyright (C) 2026 Quantum ESPRESSO group
++! This file is distributed under the terms of the
++! GNU General Public License. See the file `License'
++! in the root directory of the present distribution,
++! or http://www.gnu.org/copyleft/gpl.txt .
++!
++!----------------------------------------------------------------------------
++MODULE xc_nxc
++  !--------------------------------------------------------------------------
++  !! Machine-learned LDA / GGA / meta-GGA functionals through libnxc.
++  !
++  !! Selected with input_dft='NXC'.  The model directory (containing the
++  !! TorchScript file 'xc') is read from the environment variable NXC_MODEL;
++  !! its name must start with LDA_, GGA_ or MGGA_, which sets the family.
++  !! The whole functional is evaluated by libnxc:
++  !!  - LDA:  in xc()          (energy per particle, as the LDA wrappers)
++  !!  - GGA:  in xc_gcx()      (energy per volume; xc() returns zero: NOX NOC)
++  !!  - MGGA: in xc_metagcx()  (energy per volume; tau in Hartree/Libxc units)
++  !! Units are Hartree, as in the other XClib wrappers.  PBE (GGA) and TPSS
++  !! (meta-GGA) indices are set only as placeholders so that PW computes
++  !! gradients / kinetic energy densities; second derivatives (DFPT) are not
++  !! available and stop with an error.
++  !
++  USE kind_l,  ONLY: DP
++  !
++  IMPLICIT NONE
++  !
++  PRIVATE
++  PUBLIC :: nxc_select, nxc_xc_lda, nxc_xc_gcx, nxc_xc_metagcx
++  !
++  INTEGER, SAVE :: nspin_loaded = 0
++  !
++CONTAINS
++  !
++  !--------------------------------------------------------------------------
++  SUBROUTINE nxc_select( iexch, icorr, igcx, igcc, imeta, imetac )
++    !------------------------------------------------------------------------
++    !! Reads NXC_MODEL, sets the family and the placeholder XC indices.
++    !
++    USE dft_setting_params, ONLY: is_nxc, nxc_model, nxc_family
++    !
++    INTEGER, INTENT(OUT) :: iexch, icorr, igcx, igcc, imeta, imetac
++    !
++    CHARACTER(LEN=512) :: base
++    INTEGER :: stat, i
++    LOGICAL :: found
++    !
++    CALL GET_ENVIRONMENT_VARIABLE( 'NXC_MODEL', nxc_model, STATUS=stat )
++    IF ( stat /= 0 .OR. LEN_TRIM(nxc_model) == 0 ) CALL xclib_error( 'nxc_select', &
++         'input_dft=NXC needs the environment variable NXC_MODEL (model directory)', 1 )
++    !
++    i = LEN_TRIM(nxc_model)
++    IF ( nxc_model(i:i) == '/' ) nxc_model(i:i) = ' '
++    INQUIRE( FILE=TRIM(nxc_model)//'/xc', EXIST=found )
++    IF ( .NOT. found ) CALL xclib_error( 'nxc_select', 'no file xc in NXC_MODEL='// &
++                                         TRIM(nxc_model), 2 )
++    !
++    base = nxc_model( INDEX(nxc_model, '/', BACK=.TRUE.)+1 : )
++    iexch = 0 ; icorr = 0 ; igcx = 0 ; igcc = 0 ; imeta = 0 ; imetac = 0
++    IF ( base(1:4) == 'LDA_' ) THEN
++       nxc_family = 1
++       iexch = 1 ; icorr = 4          ! placeholders (SLA, PW)
++    ELSEIF ( base(1:4) == 'GGA_' ) THEN
++       nxc_family = 2
++       igcx = 3 ; igcc = 4            ! placeholders (PBX, PBC)
++    ELSEIF ( base(1:5) == 'MGGA_' ) THEN
++       nxc_family = 3
++       imeta = 1                      ! placeholder (TPSS)
++    ELSE
++       CALL xclib_error( 'nxc_select', 'model directory name must start with LDA_, &
++                         &GGA_ or MGGA_: '//TRIM(base), 3 )
++    ENDIF
++    is_nxc = .TRUE.
++    nspin_loaded = 0
++    !
++  END SUBROUTINE nxc_select
++  !
++  !
++  !--------------------------------------------------------------------------
++  SUBROUTINE ensure_loaded( ns )
++    !------------------------------------------------------------------------
++    !! Loads the libnxc functional for ns spin channels (1 or 2) if needed.
++    !
++#if defined(__NXC)
++    USE nxc,                ONLY: nxc_init
++#endif
++    USE dft_setting_params, ONLY: nxc_model
++    !
++    INTEGER, INTENT(IN) :: ns
++    INTEGER :: ierr
++    !
++    IF ( ns == nspin_loaded ) RETURN
++#if defined(__NXC)
++    CALL nxc_init( TRIM(nxc_model), ns, ierr )
++    IF ( ierr /= 0 ) CALL xclib_error( 'nxc', 'libnxc could not load '//TRIM(nxc_model), 1 )
++    nspin_loaded = ns
++#else
++    CALL xclib_error( 'nxc', 'QE compiled without libnxc (cmake -DQE_ENABLE_NXC=ON)', 1 )
++#endif
++    !
++  END SUBROUTINE ensure_loaded
++  !
++  !
++  !--------------------------------------------------------------------------
++  SUBROUTINE check( ierr, where )
++    INTEGER, INTENT(IN) :: ierr
++    CHARACTER(LEN=*), INTENT(IN) :: where
++    IF ( ierr /= 0 ) CALL xclib_error( 'nxc', 'libnxc evaluation failed in '//where, ierr )
++  END SUBROUTINE check
++  !
++  !
++  !--------------------------------------------------------------------------
++  SUBROUTINE nxc_xc_lda( length, srd, svd, rho_in, ex_out, ec_out, vx_out, vc_out )
++    !------------------------------------------------------------------------
++    !! LDA: rho_in = (total[, magnetization]); energies per particle.
++    !
++#if defined(__NXC)
++    USE nxc,  ONLY: nxc_lda
++#endif
++    INTEGER,  INTENT(IN)  :: length, srd, svd
++    REAL(DP), INTENT(IN)  :: rho_in(length,srd)
++    REAL(DP), INTENT(OUT) :: ex_out(length), vx_out(length,svd)
++    REAL(DP), INTENT(OUT) :: ec_out(length), vc_out(length,svd)
++    !
++    REAL(DP), ALLOCATABLE :: r(:,:), vr(:,:)
++    REAL(DP) :: amag, arho, zeta
++    INTEGER :: ns, k, ierr
++    !
++    ns = MERGE( 1, 2, srd == 1 )
++    ALLOCATE( r(length,ns), vr(length,ns) )
++    DO k = 1, length
++       IF ( srd == 1 ) THEN
++          r(k,1) = ABS( rho_in(k,1) )
++       ELSE
++          ! as QE's LSDA drivers: zeta = m/|rho| clipped to [-1,1], total |rho| preserved
++          arho = ABS( rho_in(k,1) )
++          amag = MERGE( rho_in(k,2), SQRT(SUM(rho_in(k,2:srd)**2)), srd == 2 )
++          zeta = 0.0_DP
++          IF ( arho > 0.0_DP ) zeta = MAX( -1.0_DP, MIN( 1.0_DP, amag / arho ) )
++          r(k,1) = arho * ( 1.0_DP + zeta ) * 0.5_DP
++          r(k,2) = arho * ( 1.0_DP - zeta ) * 0.5_DP
++       ENDIF
++    ENDDO
++    CALL ensure_loaded( ns )
++#if defined(__NXC)
++    CALL nxc_lda( length, r, ex_out, vr, ierr )
++    CALL check( ierr, 'xc (LDA)' )
++#endif
++    ec_out = 0.0_DP
++    vx_out = 0.0_DP
++    vc_out = 0.0_DP
++    vx_out(:,1:ns) = vr
++    DEALLOCATE( r, vr )
++    !
++  END SUBROUTINE nxc_xc_lda
++  !
++  !
++  !--------------------------------------------------------------------------
++  SUBROUTINE nxc_xc_gcx( length, ns, rho, grho, ex, ec, v1x, v2x, v1c, v2c, v2c_ud )
++    !------------------------------------------------------------------------
++    !! GGA: full functional; ex = rho*eps_xc, v1 = dE/drho, v2 = 2 dE/dsigma_ss,
++    !! v2c_ud = dE/dsigma_ud (conventions of xc_gcx).
++    !
++#if defined(__NXC)
++    USE nxc,  ONLY: nxc_gga
++#endif
++    INTEGER,  INTENT(IN)  :: length, ns
++    REAL(DP), INTENT(IN)  :: rho(length,ns), grho(3,length,ns)
++    REAL(DP), INTENT(OUT) :: ex(length), ec(length)
++    REAL(DP), INTENT(OUT) :: v1x(length,ns), v2x(length,ns), v1c(length,ns), v2c(length,ns)
++    REAL(DP), INTENT(OUT) :: v2c_ud(length)
++    !
++    REAL(DP), ALLOCATABLE :: r(:,:), sig(:,:), exc(:), vr(:,:), vs(:,:)
++    INTEGER :: k, ierr
++    !
++    ALLOCATE( r(length,ns), sig(length,2*ns-1), exc(length), vr(length,ns), vs(length,2*ns-1) )
++    IF ( ns == 1 ) THEN
++       DO k = 1, length
++          r(k,1) = ABS( rho(k,1) )
++          sig(k,1) = SUM( grho(:,k,1)**2 )
++       ENDDO
++    ELSE
++       DO k = 1, length
++          r(k,:) = rho(k,:)
++          sig(k,1) = SUM( grho(:,k,1)**2 )
++          sig(k,2) = SUM( grho(:,k,1)*grho(:,k,2) )
++          sig(k,3) = SUM( grho(:,k,2)**2 )
++       ENDDO
++    ENDIF
++    CALL ensure_loaded( ns )
++#if defined(__NXC)
++    CALL nxc_gga( length, r, sig, exc, vr, vs, ierr )
++    CALL check( ierr, 'xc_gcx (GGA)' )
++#endif
++    ec = 0.0_DP ; v1c = 0.0_DP ; v2c = 0.0_DP ; v2c_ud = 0.0_DP
++    IF ( ns == 1 ) THEN
++       ex(:) = exc(:) * r(:,1) * SIGN( 1.0_DP, rho(:,1) )
++       v1x(:,1) = vr(:,1)
++       v2x(:,1) = 2.0_DP * vs(:,1)
++    ELSE
++       ex(:) = exc(:) * ( rho(:,1) + rho(:,2) )
++       v1x(:,:) = vr(:,:)
++       v2x(:,1) = 2.0_DP * vs(:,1)
++       v2x(:,2) = 2.0_DP * vs(:,3)
++       v2c_ud(:) = vs(:,2)
++    ENDIF
++    DEALLOCATE( r, sig, exc, vr, vs )
++    !
++  END SUBROUTINE nxc_xc_gcx
++  !
++  !
++  !--------------------------------------------------------------------------
++  SUBROUTINE nxc_xc_metagcx( length, ns, np, rho, grho, tau, ex, ec, v1x, v2x, v3x, &
++                             v1c, v2c, v3c )
++    !------------------------------------------------------------------------
++    !! meta-GGA: full functional (conventions of xc_metagcx: ex = rho*eps_xc,
++    !! v2x = 2 dE/dsigma_ss multiplies grad rho_s, v2c holds the cross term
++    !! dE/dsigma_ud * grad rho_s' as a vector, v3 = dE/dtau).
++    !
++#if defined(__NXC)
++    USE nxc,  ONLY: nxc_mgga
++#endif
++    INTEGER,  INTENT(IN)  :: length, ns, np
++    REAL(DP), INTENT(IN)  :: rho(length,ns), grho(3,length,ns), tau(length,ns)
++    REAL(DP), INTENT(OUT) :: ex(length), ec(length)
++    REAL(DP), INTENT(OUT) :: v1x(length,ns), v2x(length,ns), v3x(length,ns)
++    REAL(DP), INTENT(OUT) :: v1c(length,ns), v2c(np,length,ns), v3c(length,ns)
++    !
++    REAL(DP), ALLOCATABLE :: r(:,:), sig(:,:), t(:,:), lap(:,:), exc(:)
++    REAL(DP), ALLOCATABLE :: vr(:,:), vs(:,:), vl(:,:), vt(:,:)
++    INTEGER :: k, ipol, ierr
++    !
++    ALLOCATE( r(length,ns), sig(length,2*ns-1), t(length,ns), lap(length,ns), exc(length) )
++    ALLOCATE( vr(length,ns), vs(length,2*ns-1), vl(length,ns), vt(length,ns) )
++    lap = 0.0_DP
++    IF ( ns == 1 ) THEN
++       DO k = 1, length
++          r(k,1) = ABS( rho(k,1) )
++          sig(k,1) = SUM( grho(:,k,1)**2 )
++          t(k,1) = tau(k,1)
++       ENDDO
++    ELSE
++       DO k = 1, length
++          r(k,:) = rho(k,:)
++          t(k,:) = tau(k,:)
++          sig(k,1) = SUM( grho(:,k,1)**2 )
++          sig(k,2) = SUM( grho(:,k,1)*grho(:,k,2) )
++          sig(k,3) = SUM( grho(:,k,2)**2 )
++       ENDDO
++    ENDIF
++    CALL ensure_loaded( ns )
++#if defined(__NXC)
++    CALL nxc_mgga( length, r, sig, lap, t, exc, vr, vs, vl, vt, ierr )
++    CALL check( ierr, 'xc_metagcx (meta-GGA)' )
++#endif
++    ec = 0.0_DP ; v1c = 0.0_DP ; v2c = 0.0_DP ; v3c = 0.0_DP
++    v1x(:,:) = vr(:,:)
++    v3x(:,:) = vt(:,:)
++    IF ( ns == 1 ) THEN
++       ex(:) = exc(:) * r(:,1)
++       v2x(:,1) = 2.0_DP * vs(:,1)
++    ELSE
++       ex(:) = exc(:) * ( rho(:,1) + rho(:,2) )
++       v2x(:,1) = 2.0_DP * vs(:,1)
++       v2x(:,2) = 2.0_DP * vs(:,3)
++       DO k = 1, length
++          DO ipol = 1, np
++             v2c(ipol,k,1) = vs(k,2) * grho(ipol,k,2)
++             v2c(ipol,k,2) = vs(k,2) * grho(ipol,k,1)
++          ENDDO
++       ENDDO
++    ENDIF
++    DEALLOCATE( r, sig, t, lap, exc, vr, vs, vl, vt )
++    !
++  END SUBROUTINE nxc_xc_metagcx
++  !
++END MODULE xc_nxc
+diff --git a/XClib/xc_wrapper_d_gga.f90 b/XClib/xc_wrapper_d_gga.f90
+index e5a8ec0..2894255 100644
+--- a/XClib/xc_wrapper_d_gga.f90
++++ b/XClib/xc_wrapper_d_gga.f90
+@@ -68,6 +68,8 @@ SUBROUTINE dgcxc_( length, sp, r_in, g_in, dvxc_rr, dvxc_sr, dvxc_ss )
+   USE xc_f03_lib_m
+   USE dft_setting_params,   ONLY: xc_func, xc_info
+ #endif
++  !
++  USE dft_setting_params, ONLY: is_nxc_d => is_nxc
+   !
+   IMPLICIT NONE
+   !
+@@ -106,6 +108,7 @@ SUBROUTINE dgcxc_( length, sp, r_in, g_in, dvxc_rr, dvxc_sr, dvxc_ss )
+   REAL(DP), PARAMETER :: small=1.E-10_DP, rho_trash=0.5_DP
+   REAL(DP), PARAMETER :: epsr=1.0d-6, epsg=1.0d-6
+   !
++  IF ( is_nxc_d ) CALL xclib_error( 'dgcxc_', 'second derivatives are not available for input_dft=NXC (libnxc)', 1 )
+   !$acc data present( r_in, g_in, dvxc_rr, dvxc_sr, dvxc_ss )
+   !
+   IF ( ANY(.NOT.is_libxc(3:4)) ) THEN
+diff --git a/XClib/xc_wrapper_d_lda_lsda.f90 b/XClib/xc_wrapper_d_lda_lsda.f90
+index a5adda9..0267391 100644
+--- a/XClib/xc_wrapper_d_lda_lsda.f90
++++ b/XClib/xc_wrapper_d_lda_lsda.f90
+@@ -64,6 +64,8 @@ SUBROUTINE dmxc_( length, srd, rho_in, dmuxc )
+   USE xc_f03_lib_m
+   USE dft_setting_params,   ONLY: xc_func, xc_info
+ #endif
++  !
++  USE dft_setting_params, ONLY: is_nxc_d => is_nxc
+   !
+   IMPLICIT NONE
+   !
+@@ -93,6 +95,7 @@ SUBROUTINE dmxc_( length, srd, rho_in, dmuxc )
+   INTEGER :: ir, length_lxc, length_dlxc, fkind_x
+   REAL(DP), PARAMETER :: small=1.E-10_DP, rho_trash=0.5_DP
+   !
++  IF ( is_nxc_d ) CALL xclib_error( 'dmxc_', 'second derivatives are not available for input_dft=NXC (libnxc)', 1 )
+   !$acc data present( rho_in, dmuxc )
+   !
+   !$acc kernels
+diff --git a/XClib/xc_wrapper_gga.f90 b/XClib/xc_wrapper_gga.f90
+index 30727fe..b2e5a9a 100644
+--- a/XClib/xc_wrapper_gga.f90
++++ b/XClib/xc_wrapper_gga.f90
+@@ -104,8 +104,10 @@ SUBROUTINE xc_gcx_( length, ns, rho, grho, ex, ec, v1x, v2x, v1c, v2c, v2c_ud )
+   USE xclib_utils_and_para, ONLY: error_msg, nowarning
+   USE dft_setting_params,   ONLY: igcx, igcc, is_libxc, rho_threshold_gga, &
+                                   grho_threshold_gga, rho_threshold_lda,   &
+-                                  ishybrid, exx_started, exx_fraction
++                                  ishybrid, exx_started, exx_fraction, is_nxc, &
++                                  nxc_family
+   USE qe_drivers_gga
++  USE xc_nxc,               ONLY: nxc_xc_gcx
+   !
+   IMPLICIT NONE
+   !
+@@ -149,6 +151,13 @@ SUBROUTINE xc_gcx_( length, ns, rho, grho, ex, ec, v1x, v2x, v1c, v2c, v2c_ud )
+   REAL(DP) :: rho_up, rho_dw, grho_up, grho_dw, sgn1
+   REAL(DP), PARAMETER :: small = 1.E-10_DP
+   !
++  IF ( is_nxc .AND. nxc_family == 2 ) THEN   ! libnxc GGA (whole functional; LDA part is NOX NOC)
++    ! (for NXC meta-GGAs, xc_gcx is reached only through v_xc, e.g. from force_cc and
++    !  stres_cc; it then returns zero, as for QE's own meta-GGAs)
++    CALL nxc_xc_gcx( length, ns, rho, grho, ex, ec, v1x, v2x, v1c, v2c, v2c_ud )
++    RETURN
++  ENDIF
++  !
+   !$acc data present( rho, grho, ex, ec, v1x, v2x, v1c, v2c, v2c_ud )
+   !
+   ierr = 0
+diff --git a/XClib/xc_wrapper_lda_lsda.f90 b/XClib/xc_wrapper_lda_lsda.f90
+index 1ee6c13..ee617e9 100644
+--- a/XClib/xc_wrapper_lda_lsda.f90
++++ b/XClib/xc_wrapper_lda_lsda.f90
+@@ -71,8 +71,9 @@ SUBROUTINE xc_( length, srd, svd, rho_in, ex_out, ec_out, vx_out, vc_out )
+   !
+   USE kind_l,               ONLY: DP
+   USE dft_setting_params,   ONLY: iexch, icorr, is_libxc, rho_threshold_lda, &
+-                                  finite_size_cell_volume_set
++                                  finite_size_cell_volume_set, is_nxc, nxc_family
+   USE qe_drivers_lda_lsda
++  USE xc_nxc,               ONLY: nxc_xc_lda
+   !
+   IMPLICIT NONE
+   !
+@@ -101,6 +102,11 @@ SUBROUTINE xc_( length, srd, svd, rho_in, ex_out, ec_out, vx_out, vc_out )
+   REAL(DP) :: arho_ir
+   INTEGER  :: ir
+   !
++  IF ( is_nxc .AND. nxc_family == 1 ) THEN     ! libnxc LDA (whole functional)
++    CALL nxc_xc_lda( length, srd, svd, rho_in, ex_out, ec_out, vx_out, vc_out )
++    RETURN
++  ENDIF
++  !
+   !$acc data present( rho_in, ex_out, ec_out, vx_out, vc_out )
+   !
+   is_libxc1 = is_libxc(1)
+diff --git a/XClib/xc_wrapper_mgga.f90 b/XClib/xc_wrapper_mgga.f90
+index 01eab72..a103a21 100644
+--- a/XClib/xc_wrapper_mgga.f90
++++ b/XClib/xc_wrapper_mgga.f90
+@@ -88,8 +88,9 @@ SUBROUTINE xc_metagcx_( length, ns, np, rho, grho, tau, ex, ec, v1x, v2x, v3x, v
+   USE kind_l,               ONLY: DP
+   USE dft_setting_params,   ONLY: imeta, imetac, is_libxc, rho_threshold_mgga,&
+                                   grho2_threshold_mgga, tau_threshold_mgga,   &
+-                                  ishybrid, exx_started, exx_fraction
++                                  ishybrid, exx_started, exx_fraction, is_nxc
+   USE qe_drivers_mgga
++  USE xc_nxc,               ONLY: nxc_xc_metagcx
+   !
+   IMPLICIT NONE
+   !
+@@ -142,6 +143,12 @@ SUBROUTINE xc_metagcx_( length, ns, np, rho, grho, tau, ex, ec, v1x, v2x, v3x, v
+   INTEGER :: lengthxc
+ #endif
+ #endif
++  !
++  IF ( is_nxc ) THEN          ! libnxc meta-GGA (whole functional)
++    CALL nxc_xc_metagcx( length, ns, np, rho, grho, tau, ex, ec, v1x, v2x, v3x, &
++                         v1c, v2c, v3c )
++    RETURN
++  ENDIF
+   !
+   !$acc data present( rho, grho, tau, ex, ec, v1x, v2x, v3x, v1c, v2c, v3c )
+   !
+-- 
+2.39.5 (Apple Git-154)
+

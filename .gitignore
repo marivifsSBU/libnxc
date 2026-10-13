@@ -138,3 +138,9 @@ log/
 
 # CMake build directory
 build-cmake/
+build-*/
+*.swp
+devtools/hpc/results/
+qe/runs/
+qe/results/
+results/

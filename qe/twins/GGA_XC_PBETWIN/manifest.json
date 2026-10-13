@@ -1,0 +1,6 @@
+{
+ "name": "GGA_XC_PBETWIN",
+ "thresholds": "internal",
+ "twin_of": "PBE",
+ "note": "analytic twin for validating the QE-libnxc hook"
+}

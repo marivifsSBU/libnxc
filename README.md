@@ -1,68 +1,209 @@
-[![Documentation Status](https://readthedocs.org/projects/libnxc/badge/?version=latest)](https://libnxc.readthedocs.io/en/latest/?badge=latest)
-![Python Unit Testing](https://github.com/semodi/libnxc/actions/workflows/python-app.yml/badge.svg)
-![Build](https://github.com/semodi/libnxc/actions/workflows/build.yml/badge.svg)
-[![codecov](https://codecov.io/gh/semodi/libnxc/branch/master/graph/badge.svg?token=PM061YXF17)](https://codecov.io/gh/semodi/libnxc)
 # Lib**n**xc
 
-Libnxc is a libary to use **machine learned** exchange-correlation functionals for density functional theory.
-All common functional types (LDA, GGA, metaGGA) as well as NeuralXC type functionals  are supported.
-Libnxc is written in C++ and has Fortran bindings. An implementation in Python, `pylibnxc` is also available.
-Libnxc is inspired by Libxc, mirroring as closely  as possible its API. In doing so, the integration of Libnxc in electronic structure codes that use Libxc should be straightforward.
-Libnxc can utilize multi-processing through MPI and model inference on GPUs through CUDA is supported as well.
-Although the primary motivation for Libnxc was to add support for neural network based functionals, other types of models can be used as well.
-As long as the following requirements are fulfilled, models can be used by Libnxc:
+libnxc is a library for running **machine-learned exchange-correlation functionals**
+(LDA, GGA, meta-GGA, and NeuralXC-type) inside density functional theory codes. It is
+written in C++ with Fortran bindings and mirrors the API of [Libxc](https://libxc.gitlab.io),
+so that codes that call Libxc can call libnxc in the same way. A pure-Python implementation,
+`pylibnxc`, is included and plugs into [PySCF](https://pyscf.org). Models are TorchScript
+files, and PyTorch's automatic differentiation provides all the potential terms.
 
-  1. The model has to be implemented in PyTorch and serialized into a TorchScript model (e.g. with ``torch.jit.trace``)
-  2. The model input and output has to follow the form specified in the [Documentation](https://libnxc.readthedocs.io/en/latest/functionals.html)
+**libnxc 2.0 (2026)** is a revival and substantial rewrite of the original libnxc
+(S. Dick and M. Fernández-Serra, 2020–2021; see [Credits and history](#credits-and-history)).
+It adds:
 
-The serialized model is regarded as a containerized black box by Libnxc.
-Thus, even simple polynomial models can be implemented and evaluated.
-While not replacing hard-coded functionals such as the ones employed by Libxc and directly by DFT codes,
-this approach provides several advantages:
+- **An exporter from JAX/Equinox to libnxc** (`exporter/`). Models trained with
+  differentiable-DFT codes in JAX are converted into libnxc TorchScript models. An export
+  fails unless exc, vrho, vsigma and vtau agree with the JAX model to a relative error of
+  1e-10. The check uses random and molecular densities, spin-polarized and unpolarized, and goes
+  through the same code path used in SCF. Every exported model carries a manifest (sources
+  with sha256, architecture, versions) and the source checkpoints themselves.
+- **Full meta-GGA (τ) support** for exported models, with Libxc-compatible density, σ and
+  τ thresholds.
+- **A Quantum ESPRESSO 7.4.1 interface** (`qe/`). A small patch to XClib (`input_dft='NXC'`)
+  routes the SCF, forces and stress (including meta-GGA stress) through libnxc, for
+  plane-wave calculations of solids.
+- **A modern build.** CMake against current libtorch (C++20; tested with torch 2.14) on Linux
+  and macOS (Apple silicon). There is a new Fortran module `nxc` (ISO_C_BINDING, with error
+  codes), and the legacy `nxc_f90_*` routines are kept.
+- **pylibnxc for PySCF ≥ 2** (RKS/UKS, mixtures with exact exchange).
+- **Tests.** The C++ and Fortran APIs are checked against pylibnxc on 49 reference cases. The
+  exporter and PySCF test suites are included, and QE is validated against analytic "twin"
+  functionals.
+- **New models** (`models/`): spin-aware neural PBE clones and neural r2SCAN clones (see
+  [Models](#models)).
 
-  - **Fast experimentation**: Functionals can be quickly implemented and used in a 'plug-and-play' manner
-  - **Automatic differentiation**: PyTorch takes care of calculating all derivative terms needed in the exchange-correlation potential.
-  - **Native GPU support**: PyTorch is designed to be run on GPUs using CUDA. This extends to serialized TorchScript models, therefore
-    evaluating libnxc functionals on GPUs is straightforward.
+## Installation
 
+### pylibnxc (Python, PySCF)
+```bash
+pip install -e .                 # torch, numpy
+pip install -e .[pyscf]          # + PySCF interface
+pip install -e .[export]         # + JAX/Equinox exporter
+```
 
-Table of Contents
-=================
-
-   * [Lib<strong>n</strong>xc](#libnxc)
-      * [Dependencies](#dependencies)
-      * [Installation](#Installation)
-      * [Quickstart](#quickstart)
-      * [Using Pylibnxc with PySCF](#using-pylibnxc-with-pyscf)
-      * [Using Libnxc with Libxc](#using-libnxc-with-libxc)
-      * [Shipped functionals](#shipped-functionals)
-
-## Revival branch (2026): build with CMake
-
-The `revival` branch builds with CMake against a current libtorch (tested: torch 2.14 on
-macOS arm64 with Apple clang 17 + gfortran 14; libtorch >= 2.10 needs C++20). The libtorch of
-a pip/conda torch installation works; use the same torch version (or newer) as the one that
-exported the models.
-
+### libnxc (C++/Fortran)
 ```bash
 TORCH_PREFIX=$(python -c 'import torch; print(torch.utils.cmake_prefix_path)')
-cmake -S . -B build-cmake -DCMAKE_PREFIX_PATH="$TORCH_PREFIX" \
-      -DNXC_TEST_PYTHON=$(which python)           # python with torch (+pyscf) for the tests
+cmake -S . -B build-cmake -DCMAKE_PREFIX_PATH="$TORCH_PREFIX" -DNXC_TEST_PYTHON=$(which python)
 cmake --build build-cmake -j
 ctest --test-dir build-cmake --output-on-failure
 ```
-(on macOS with Homebrew gfortran, `export SDKROOT=$(xcrun --show-sdk-path)` first)
+- libtorch ≥ 2.10 needs a C++20 compiler (GCC ≥ 11 or a recent clang). The libtorch of a
+  pip/conda torch works. Use the torch version that exported the models, or newer: the
+  models in `models/` were written with torch 2.14.
+- On macOS with Homebrew gfortran, `export SDKROOT=$(xcrun --show-sdk-path)` first.
+- Use pthreads OpenBLAS in the same environment. The OpenMP build loads a second OpenMP
+  runtime next to torch's, and the process aborts.
+- Cluster recipe (conda-forge compilers, Slurm): [devtools/hpc](devtools/hpc/README.md).
 
-- C++ API: `src/nxc.h`; Fortran module `nxc` (`src/nxc_mod.f90`, ISO_C_BINDING, with error
-  codes); the legacy implicit-interface `nxc_f90_*` routines (SIESTA patch) are kept.
-- Custom models: any directory `<LDA|GGA|MGGA>_<...>/xc` can be passed by path.
-- Arrays are spin-blocked with the grid index fastest (`rho(np, nspin)`); see docs/cpp.rst.
-- `test/revival`: C++ and Fortran APIs vs pylibnxc on random, fully spin-polarized and
-  molecular densities (layouts, add mode, single points, sub-threshold points).
-- The Libxc hook (`src/libxc`, `utils/libxc`) targets Libxc 4.3.4 internals only and is not
-  maintained; host codes should call libnxc directly.
+The C++ API is in `src/nxc.h`, and the Fortran module is in `src/nxc_mod.f90`. Arrays are
+spin-blocked with the grid index fastest (`rho(np, nspin)`); see `docs/cpp.rst`. Any directory
+`<LDA|GGA|MGGA>_<...>/xc` can be passed by path as a model.
 
-## Dependencies
+## Quickstart
+
+### PySCF
+```python
+from pyscf import gto
+from pylibnxc.pyscf import RKS, UKS
+
+mol = gto.M(atom='O 0 0 0; H 0 0 0.97', basis='def2-tzvp', spin=1)
+mf = UKS(mol, nxc='models/MGGA_XC_R2SCAN_CLONE_SC')      # a model directory, or a shipped name
+mf.kernel()
+```
+Mixtures use the PySCF syntax, e.g. `nxc='0.25*HF + 0.75*GGA_X_PBE, GGA_C_PBE'`.
+
+### Quantum ESPRESSO
+Build `pw.x` with the patch in [qe/](qe/README.md), then
+```
+&SYSTEM
+  input_dft = 'NXC'
+/
+```
+```bash
+export NXC_MODEL=$PWD/models/GGA_XC_PBECLONE_TL     # directory containing 'xc'
+pw.x < pw.in > pw.out
+```
+
+### Export a JAX/Equinox model
+```bash
+python -m exporter.export --recipe xcdiff_pol \
+    --fx <dir>/GGA_Fx_xcdiff_d3_n16_s42_v_20000 --fc <dir>/GGA_Fc_xcdiff_d3_n16_s42_v_20000 \
+    --name GGA_XC_MYCLONE --outdir models
+python -m exporter.export --recipe mgga_x3 --xc <dir>/xc.eqx --name MGGA_XC_MYMODEL --outdir models
+```
+This writes `models/<name>/`, which contains:
+- `xc`: the TorchScript model;
+- `manifest.json`;
+- `weights.npz`: raw weights, for evaluators that do not use libtorch;
+- `check.json`: the numerical gate;
+- `source/`: the Equinox checkpoints.
+
+| recipe | network classes | spin |
+|---|---|---|
+| `sara_unpol_log10` | `GGA_F{x,c}_G_transf[_lin]` (log10 features) | unpolarized only; the model refuses \|ζ\| > 1e-6 |
+| `xcdiff_pol` | `GGA_F{x,c}_xcdiff[_unct]` (spin-aware, ln features) | exchange by spin scaling; F_c(x0, ln ζ′, x2)·PW92(r_s, ζ) |
+| `mgga_x3` | meta-GGA `MXC` (r2SCAN-type ᾱ) | as `xcdiff_pol`, plus x3 = (1−ᾱ)/(1+ᾱ); optional one-electron gate on F_c |
+| `demo_mgga_alpha` | `MGGA_F{x,c}_demo` (untrained) | for testing vtau |
+
+To add a new model family, add three things:
+- its Equinox class in `exporter/eqx_classes.py`;
+- a JAX recipe in `exporter/recipes_jax.py`;
+- the same maths in `exporter/nxc_torch.py`.
+
+The numerical gate checks that the two implementations agree.
+
+## Models
+
+New in 2.0 (exported with the exporter; the source checkpoints are in `models/<name>/source`):
+
+| name | description |
+|---|---|
+| `GGA_XC_PBECLONE_TL` | spin-aware neural PBE clone with exact constraints [3] |
+| `GGA_XC_PBECLONE_UT` | the same, unconstrained [3] |
+| `GGA_XC_PBECLONE_UNPOL_S05R1` | unpolarized neural PBE clone [3] (refuses spin-polarized input) |
+| `MGGA_XC_R2SCAN_CLONE` | neural meta-GGA clone of r2SCAN |
+| `MGGA_XC_R2SCAN_CLONE_SC` | the same, with a one-electron (self-correlation-free) gate on correlation |
+| `MGGA_XC_DEMO_RANDOM` | untrained meta-GGA, for testing only |
+
+The shipped models of libnxc 0.x are listed below ([Shipped functionals](#shipped-functionals)).
+They remain available by name, e.g. `GGA_XC_PBE`, `MGGA_XC_SCAN` and `MGGA_XC_XCDIFF` [2].
+
+## Validation (summary)
+
+- **PySCF.** Exported models reproduce the SCF energies of the JAX code that trained them to
+  0.000 µEh (H2O, OH; def2-TZVP). The r2SCAN clones are within 0.04–0.3 mEh of Libxc r2SCAN,
+  and the PBE clones within 0.06–0.5 mEh of Libxc PBE.
+- **Quantum ESPRESSO 7.4.1.**
+  - Analytic twins of Slater, PBE, PKZB and LTA reproduce QE-native and QE+Libxc energies,
+    forces and stresses to 1e-8 Ry.
+  - The neural PBE clones reproduce PBE lattice constants to 0.0001–0.005 Å and bulk moduli to
+    1–3 GPa (Si, c-BN, bcc Mo).
+  - The neural r2SCAN clone reproduces Libxc r2SCAN for Si to 0.001 Å, 0.1 GPa, and band gaps
+    to 0.01 eV.
+
+  The scripts are in `qe/`, and the limitations and caveats are in [qe/README.md](qe/README.md).
+- **Scripts.** `validation/` holds the PySCF end-to-end scripts, the finite-difference V_xc
+  check and the regression against libnxc 0.x numbers.
+
+## Credits and history
+
+libnxc was created by **Sebastian Dick** in the group of **Marivi Fernández-Serra** at Stony
+Brook University (2020–2021, [github.com/semodi/libnxc](https://github.com/semodi/libnxc)).
+It was used to deploy NeuralXC [1] and the differentiable-programming functional
+xc-diff [2]. This repository continues that project. The full development history of the
+original libnxc is preserved in this repository's git history, with its original authorship.
+
+libnxc 2.0 (2026) was developed by M. Fernández-Serra's group at Stony Brook University. Its
+main pieces are:
+- the exporter, the meta-GGA work and the C++/Fortran modernization;
+- the PySCF ≥ 2 port;
+- the Quantum ESPRESSO interface.
+
+The neural PBE clones are from S. Navarro-Rodríguez *et al.* [3]. The shipped NN-LDA/GGA/meta-GGA
+"HM" models are from Nagai, Akashi and Sugino (see below).
+
+See [AUTHORS.md](AUTHORS.md) and [CHANGELOG.md](CHANGELOG.md).
+
+## Citing
+
+If you use libnxc, please cite this repository ([CITATION.cff](CITATION.cff)) and the papers
+of the functionals you use:
+
+1. S. Dick and M. Fernández-Serra, *Machine learning accurate exchange and correlation
+   functionals of the electronic density*, Nat. Commun. **11**, 3509 (2020).
+2. S. Dick and M. Fernández-Serra, *Highly accurate and constrained density functional
+   obtained with differentiable programming*, Phys. Rev. B **104**, L161109 (2021).
+3. S. Navarro-Rodríguez, A. Wills, K. J. Daas, M. Camarasa-Gómez and M. Fernández-Serra,
+   *Constraint-aware functional cloning for stable and transferable machine-learned density
+   functional theory*, arXiv:2605.10331 (2026).
+
+## Acknowledgments
+
+The development of libnxc 2.0 was supported by the U.S. National Science Foundation under
+award 2427902 (Collaborative Research: Optimally designed exchange-correlation functionals
+for solids using machine learning; Stony Brook University, with award 2427903 at UC Irvine).
+Any opinions, findings, and conclusions or recommendations expressed in this material are those
+of the authors and do not necessarily reflect the views of the National Science Foundation.
+
+## License
+
+libnxc is distributed under the Mozilla Public License 2.0 ([LICENSE](LICENSE)), the license
+of the original project. The Quantum ESPRESSO patch in `qe/patches/` modifies Quantum ESPRESSO
+and is distributed under QE's license (GPL-2.0-or-later).
+
+---
+
+## Original libnxc documentation
+
+The sections below are the user documentation of libnxc 0.x. They still describe the C++,
+Fortran and Python APIs and the shipped functionals. Online docs:
+[libnxc.readthedocs.io](https://libnxc.readthedocs.io) (0.x). Libnxc can use MPI, and model
+inference on GPUs through CUDA. The serialized model is treated as a black box, so any
+TorchScript model with the documented [input/output form](https://libnxc.readthedocs.io/en/latest/functionals.html)
+can be used, even a simple polynomial.
+
+### Dependencies
 
 Libnxc depends on PyTorch. The C++/Fortran implementation requires that libtorch is made available at compile time, pylibnxc depends on pytorch.
 Both libraries are available for download on the [pytorch website](https://pytorch.org/get-started/locally/).
@@ -77,7 +218,7 @@ For unit testing, pylibnxc currently requires [pyscf](https://sunqm.github.io/py
 
 To unit test the C++/Fortran implementation [GoogleTest](https://github.com/google/googletest) is required.
 
-## Installation
+### Installation (legacy Makefile build)
 
 To compile Libnxc:
 
@@ -93,7 +234,7 @@ pylibnxc operates independent of Libnxc and can be installed from within the roo
 `pip install -e .`
 
 
-## Quickstart
+### Quickstart
 
 The functionality of Libnxc may be best explained by an example
 
@@ -183,7 +324,7 @@ if __name__ == '__main__':
     print(np.stack([inp['rho'], np.round(results['zk'],6)],axis=-1))
 ```
 
-## Using Pylibnxc with PySCF
+### Using pylibnxc with PySCF
 
 Using Pylibnxc in PySCF is as simple as changing two lines of code:
 
@@ -215,7 +356,7 @@ The `nxc` keyword supports mixing of functionals similar to pyscf, e.g.
 of PBE0.
 Currently, mixing of libxc functionals with libnxc functionals is not supported.
 
-## Using Libnxc with Libxc
+### Using libnxc with Libxc (legacy)
 
 The simplest way to use machine learned functionals in existing electronic
 structure codes is by linking Libxc with Libnxc. This way, any code that supports
@@ -242,7 +383,7 @@ Libnxc source files within the Libxc `src` directory and copy a modified `Makefi
 instructions to link to Libnxc. In some cases automake needs to be run in the Libxc directory.
 - After successfully compiling Libnxc, Libxc should be re-compiled to include the new functionals.
 
-## Shipped functionals
+### Shipped functionals
 
 The following functionals were introduced in
 
@@ -265,7 +406,7 @@ The following functionals are only included for testing purposes. For small mole
 - **MGGA_X_SCAN**: Exchange part of GGA_SCAN
 - **MGGA_C_SCAN**: Correlation part of GGA_SCAN
 
-## Custom functionals
+### Custom functionals
 
 Entries for the functionals listed above are hard-coded into Libnxc. To include custom functionals without the need to change any code and re-compile
 Libnxc we have added the entries **GGA_XC_CUSTOM** and **MGGA_XC_MCUSTOM**. Using these functionals will instruct Libnxc to look for the corresponding model in the current working directory (e.g. the location from where the DFT calculation is run). This way, any model that follows the form defined in the [documentation](https://libnxc.readthedocs.io/en/latest/functionals.html) can be deployed by copying (or creating a symbolic link of) the custom model into the working directory.

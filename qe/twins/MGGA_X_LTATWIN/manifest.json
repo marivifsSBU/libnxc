@@ -1,0 +1,6 @@
+{
+ "name": "MGGA_X_LTATWIN",
+ "thresholds": "internal",
+ "twin_of": "XC-000I-000I-000I-000I-201L-000I",
+ "note": "analytic twin for validating the QE-libnxc hook"
+}

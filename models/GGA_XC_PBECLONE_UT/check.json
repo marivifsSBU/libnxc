@@ -1,0 +1,140 @@
+{
+ "recipe": "xcdiff_pol",
+ "model_dir": "GGA_XC_PBECLONE_UT",
+ "tol": 1e-10,
+ "cases": {
+  "random_unpol": {
+   "npoints": 4000,
+   "passed": true,
+   "zk": {
+    "max_abs": 4.440892098500626e-15,
+    "max_ref": 5.848847468941246,
+    "rel": 7.592764424243932e-16,
+    "finite": true
+   },
+   "vrho": {
+    "max_abs": 7.993605777301127e-15,
+    "max_ref": 7.235234632059127,
+    "rel": 1.1048163858959982e-15,
+    "finite": true
+   },
+   "vsigma": {
+    "max_abs": 5.4836273193359375e-06,
+    "max_ref": 705365756.0226647,
+    "rel": 7.774161521898064e-15,
+    "finite": true
+   }
+  },
+  "random_pol": {
+   "npoints": 4000,
+   "passed": true,
+   "zk": {
+    "max_abs": 3.552713678800501e-15,
+    "max_ref": 6.9173977501820785,
+    "rel": 5.135910651815543e-16,
+    "finite": true
+   },
+   "vrho": {
+    "max_abs": 8.881784197001252e-15,
+    "max_ref": 8.225164367148615,
+    "rel": 1.0798306028357541e-15,
+    "finite": true
+   },
+   "vsigma": {
+    "max_abs": 8.821487426757812e-06,
+    "max_ref": 18813569203.12759,
+    "rel": 4.688896259669493e-16,
+    "finite": true
+   }
+  },
+  "mol_H2O_unpol": {
+   "npoints": 30632,
+   "passed": true,
+   "zk": {
+    "max_abs": 3.552713678800501e-15,
+    "max_ref": 4.9685824352728485,
+    "rel": 7.150356716594166e-16,
+    "finite": true
+   },
+   "vrho": {
+    "max_abs": 5.329070518200751e-15,
+    "max_ref": 6.595568254994792,
+    "rel": 8.079774648931989e-16,
+    "finite": true
+   },
+   "vsigma": {
+    "max_abs": 9.549694368615746e-10,
+    "max_ref": 100284.27619785079,
+    "rel": 9.52262381569685e-15,
+    "finite": true
+   }
+  },
+  "mol_OH_pol": {
+   "npoints": 21632,
+   "passed": true,
+   "zk": {
+    "max_abs": 3.552713678800501e-15,
+    "max_ref": 4.975852830459388,
+    "rel": 7.139909076596427e-16,
+    "finite": true
+   },
+   "vrho": {
+    "max_abs": 6.217248937900877e-15,
+    "max_ref": 6.607315011094263,
+    "rel": 9.409645109188178e-16,
+    "finite": true
+   },
+   "vsigma": {
+    "max_abs": 9.881659934762865e-10,
+    "max_ref": 35299.69154862163,
+    "rel": 2.7993615528203448e-14,
+    "finite": true
+   }
+  },
+  "batch_1_unpol": {
+   "npoints": 1,
+   "passed": true,
+   "zk": {
+    "max_abs": 0.0,
+    "max_ref": 1.0,
+    "rel": 0.0,
+    "finite": true
+   },
+   "vrho": {
+    "max_abs": 0.0,
+    "max_ref": 1.0,
+    "rel": 0.0,
+    "finite": true
+   },
+   "vsigma": {
+    "max_abs": 0.0,
+    "max_ref": 1.0,
+    "rel": 0.0,
+    "finite": true
+   }
+  },
+  "batch_1_pol": {
+   "npoints": 1,
+   "passed": true,
+   "zk": {
+    "max_abs": 0.0,
+    "max_ref": 1.0,
+    "rel": 0.0,
+    "finite": true
+   },
+   "vrho": {
+    "max_abs": 0.0,
+    "max_ref": 1.0,
+    "rel": 0.0,
+    "finite": true
+   },
+   "vsigma": {
+    "max_abs": 0.0,
+    "max_ref": 1.0,
+    "rel": 0.0,
+    "finite": true
+   }
+  }
+ },
+ "passed": true
+}

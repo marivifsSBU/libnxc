@@ -1,6 +1,6 @@
-# Stage-3 revival tests: C++ and Fortran APIs vs pylibnxc reference cases.
+# C++ and Fortran APIs vs pylibnxc reference cases (shipped and exported models in models/).
 #   -DNXC_TEST_PYTHON=/path/to/python   (needs torch; pyscf optional for molecular cases)
-#   -DNXC_TEST_EXTRA_MODELS=/path/to/models   (optional: exported models, <dir>/<NAME>/xc)
+#   -DNXC_TEST_EXTRA_MODELS=/path/to/models   (optional: more models, <dir>/<NAME>/xc)
 find_package(Python3 COMPONENTS Interpreter)
 set(NXC_TEST_PYTHON "${Python3_EXECUTABLE}" CACHE FILEPATH "Python with torch (and pyscf) for reference data")
 set(NXC_TEST_EXTRA_MODELS "" CACHE PATH "Directory with additional (exported) libnxc models")
